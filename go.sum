@@ -662,6 +662,8 @@ github.com/pingcap/kvproto v0.0.0-20230403051650-e166ae588106 h1:lOtHtTItLlc9R+V
 github.com/pingcap/kvproto v0.0.0-20230403051650-e166ae588106/go.mod h1:guCyM5N+o+ru0TsoZ1hi9lDjUMs2sIBjW3ARTEpVbnk=
 github.com/pingcap/kvproto v0.0.0-20260608022438-934094768e0f h1:hfFWu4+tdYMlzwF1W04vEH13hJX+OggQIcSlwQYl7Io=
 github.com/pingcap/kvproto v0.0.0-20260608022438-934094768e0f/go.mod h1:z6+aAHB7dBkA+LyinEX+48/ImRJ3jag0Hg0c7wkhEvE=
+github.com/pingcap/kvproto v0.0.0-20260611143855-3566665c9104 h1:sNjYPcGD6V+CZl3Txt1b+VQkX6KkJXk8AxBUDizPZVo=
+github.com/pingcap/kvproto v0.0.0-20260611143855-3566665c9104/go.mod h1:z6+aAHB7dBkA+LyinEX+48/ImRJ3jag0Hg0c7wkhEvE=
 github.com/pingcap/log v1.1.1-0.20221110025148-ca232912c9f3 h1:HR/ylkkLmGdSSDaD8IDP+SZrdhV1Kibl9KrHxJ9eciw=
 github.com/pingcap/log v1.1.1-0.20221110025148-ca232912c9f3/go.mod h1:DWQW5jICDR7UJh4HtxXSM20Churx4CQL0fwL/SoOSA4=
 github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c h1:+mdjkGKdHQG3305AYmdv1U2eRNDiU2ErMBj1gwrq8eQ=
@@ -813,6 +815,8 @@ github.com/tikv/client-go/v2 v2.0.8-0.20260618160450-2645eb0b3cb6 h1:88BfxCACxiY
 github.com/tikv/client-go/v2 v2.0.8-0.20260618160450-2645eb0b3cb6/go.mod h1:FjhoGGTG0x4OFlvP++uOdJgIAZxRM30hVmIOa8oXs0Y=
 github.com/tikv/client-go/v2 v2.0.8-0.20260618163926-a6ab003d2ea8 h1:J1hMJJCeqy6gWKmcgjHlWQK35wB55URCFqadY5jYHNg=
 github.com/tikv/client-go/v2 v2.0.8-0.20260618163926-a6ab003d2ea8/go.mod h1:bL37ahHF/2GMQbbkiNBOIpC9RySbQNcfKJCWHHJMP18=
+github.com/tikv/client-go/v2 v2.0.8-0.20260618195030-b0bcaa77acb5 h1:ZddLABpsiYQVpDFzXr0+ES8cK5W6vpQc1HwlUQYnTA4=
+github.com/tikv/client-go/v2 v2.0.8-0.20260618195030-b0bcaa77acb5/go.mod h1:QY+ltzUZTmJ5IehzmYvbTE8Lsr6hNzczN/OXzisO+r8=
 github.com/tikv/pd/client v0.0.0-20230329114254-1948c247c2b1 h1:bzlSSzw+6qTwPs8pMcPI1bt27TAOhSdAEwdPCz6eBlg=
 github.com/tikv/pd/client v0.0.0-20230329114254-1948c247c2b1/go.mod h1:3cTcfo8GRA2H/uSttqA3LvMfMSHVBJaXk3IgkFXFVxo=
 github.com/tikv/pd/client v0.0.0-20260601035915-3ef6a3b10c84 h1:8gvjP484Hv4CNf4jKzdmQOm48hGP5wnEd86nrbVvn5o=
@@ -821,6 +825,8 @@ github.com/tikv/pd/client v0.0.0-20260618155903-b274f5db4825 h1:OK1zOlkFPkYlmBvk
 github.com/tikv/pd/client v0.0.0-20260618155903-b274f5db4825/go.mod h1:VVaCPMGiqKOY2fRnM3U0/Szr2iIMm+dK4W87aKOtXEc=
 github.com/tikv/pd/client v0.0.0-20260618163702-663ce147ff41 h1:Mjj7FV7Yw4OgZPRQw7wKFU8pUB/WOUAXjvcbJ5H6sQU=
 github.com/tikv/pd/client v0.0.0-20260618163702-663ce147ff41/go.mod h1:VVaCPMGiqKOY2fRnM3U0/Szr2iIMm+dK4W87aKOtXEc=
+github.com/tikv/pd/client v0.0.0-20260618194602-729ea141b819 h1:azvEqdNinRydqb4jBVKCPOPU7WGng79zzXwSmNHj+aw=
+github.com/tikv/pd/client v0.0.0-20260618194602-729ea141b819/go.mod h1:YuIGumSxztlsRfeZfi8WDk0RjvRvEW8CoQ0FtF61ENY=
 github.com/tinylib/msgp v1.1.3 h1:3giwAkmtaEDLSV0MdO1lDLuPgklgPzmk8H9+So2BVfA=
 github.com/tinylib/msgp v1.1.3/go.mod h1:+d+yLhGm8mzTaHzB+wgMYrodPfmZrzkirds8fDWklFE=
 github.com/tklauser/go-sysconf v0.3.12 h1:0QaGUFOdQaIVdPgfITYzaTegZvdCjmYO52cSFAEVmqU=
