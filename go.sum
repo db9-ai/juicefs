@@ -817,6 +817,8 @@ github.com/tikv/client-go/v2 v2.0.8-0.20260618163926-a6ab003d2ea8 h1:J1hMJJCeqy6
 github.com/tikv/client-go/v2 v2.0.8-0.20260618163926-a6ab003d2ea8/go.mod h1:bL37ahHF/2GMQbbkiNBOIpC9RySbQNcfKJCWHHJMP18=
 github.com/tikv/client-go/v2 v2.0.8-0.20260618195030-b0bcaa77acb5 h1:ZddLABpsiYQVpDFzXr0+ES8cK5W6vpQc1HwlUQYnTA4=
 github.com/tikv/client-go/v2 v2.0.8-0.20260618195030-b0bcaa77acb5/go.mod h1:QY+ltzUZTmJ5IehzmYvbTE8Lsr6hNzczN/OXzisO+r8=
+github.com/tikv/client-go/v2 v2.0.8-0.20260618201436-b2a2d303cd53 h1:mdhasNFLs8cGFSGUraByAE4TtM0ss9cTfK7NBxH8QwQ=
+github.com/tikv/client-go/v2 v2.0.8-0.20260618201436-b2a2d303cd53/go.mod h1:QY+ltzUZTmJ5IehzmYvbTE8Lsr6hNzczN/OXzisO+r8=
 github.com/tikv/pd/client v0.0.0-20230329114254-1948c247c2b1 h1:bzlSSzw+6qTwPs8pMcPI1bt27TAOhSdAEwdPCz6eBlg=
 github.com/tikv/pd/client v0.0.0-20230329114254-1948c247c2b1/go.mod h1:3cTcfo8GRA2H/uSttqA3LvMfMSHVBJaXk3IgkFXFVxo=
 github.com/tikv/pd/client v0.0.0-20260601035915-3ef6a3b10c84 h1:8gvjP484Hv4CNf4jKzdmQOm48hGP5wnEd86nrbVvn5o=
