@@ -809,10 +809,14 @@ github.com/tikv/client-go/v2 v2.0.7 h1:nNTx/AR6n8Ew5VtHanFPG8NkFLLXbaNs5/K43DDma
 github.com/tikv/client-go/v2 v2.0.7/go.mod h1:9JNUWtHN8cx8eynHZ9xzdPi5YY6aiN1ILQyhfPUBcMo=
 github.com/tikv/client-go/v2 v2.0.8-0.20260618143558-e4503f160fc8 h1:SrjLDtL/noHS8J3AeNyAprL30Obc+PdOpKRn07W9wxU=
 github.com/tikv/client-go/v2 v2.0.8-0.20260618143558-e4503f160fc8/go.mod h1:bfX4QRK8lb7hscSvG49RraKufkcqxVnh01Cqw7UWMUg=
+github.com/tikv/client-go/v2 v2.0.8-0.20260618160450-2645eb0b3cb6 h1:88BfxCACxiYTqGHYg/DFfJUWgQtTTVRAyFCubgZxEDs=
+github.com/tikv/client-go/v2 v2.0.8-0.20260618160450-2645eb0b3cb6/go.mod h1:FjhoGGTG0x4OFlvP++uOdJgIAZxRM30hVmIOa8oXs0Y=
 github.com/tikv/pd/client v0.0.0-20230329114254-1948c247c2b1 h1:bzlSSzw+6qTwPs8pMcPI1bt27TAOhSdAEwdPCz6eBlg=
 github.com/tikv/pd/client v0.0.0-20230329114254-1948c247c2b1/go.mod h1:3cTcfo8GRA2H/uSttqA3LvMfMSHVBJaXk3IgkFXFVxo=
 github.com/tikv/pd/client v0.0.0-20260601035915-3ef6a3b10c84 h1:8gvjP484Hv4CNf4jKzdmQOm48hGP5wnEd86nrbVvn5o=
 github.com/tikv/pd/client v0.0.0-20260601035915-3ef6a3b10c84/go.mod h1:GP9u8OBXqYQ6e43htjprZILrzn3tuogzkEEmmiNlzc4=
+github.com/tikv/pd/client v0.0.0-20260618155903-b274f5db4825 h1:OK1zOlkFPkYlmBvkMNfpaBi91uzlQdEAjz2qTN+fp+o=
+github.com/tikv/pd/client v0.0.0-20260618155903-b274f5db4825/go.mod h1:VVaCPMGiqKOY2fRnM3U0/Szr2iIMm+dK4W87aKOtXEc=
 github.com/tinylib/msgp v1.1.3 h1:3giwAkmtaEDLSV0MdO1lDLuPgklgPzmk8H9+So2BVfA=
 github.com/tinylib/msgp v1.1.3/go.mod h1:+d+yLhGm8mzTaHzB+wgMYrodPfmZrzkirds8fDWklFE=
 github.com/tklauser/go-sysconf v0.3.12 h1:0QaGUFOdQaIVdPgfITYzaTegZvdCjmYO52cSFAEVmqU=
