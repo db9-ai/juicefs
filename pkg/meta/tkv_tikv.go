@@ -89,6 +89,7 @@ func newTikvClient(addr string) (tkvClient, error) {
 	logger.Infof("TiKV gc interval is set to %s", interval)
 
 	var clientOpts []txnkv.ClientOpt
+	useLatestPointGet := true
 	switch query.Get("api-version") {
 	case "v3":
 		namespaceID, err := parseRequiredUint32(query, "namespace-id")
@@ -106,6 +107,7 @@ func newTikvClient(addr string) (tkvClient, error) {
 			txnkv.WithKeyspaceIdentity(namespaceID, keyspaceID),
 			txnkv.WithAPIVersion(kvrpcpb.APIVersion_V3),
 		)
+		useLatestPointGet = false
 	case "":
 		if ks := query.Get("keyspace"); ks != "" {
 			logger.Infof("Using TiKV API V2 with keyspace: %s", ks)
@@ -144,7 +146,7 @@ func newTikvClient(addr string) (tkvClient, error) {
 	}
 
 	prefix := strings.TrimLeft(tUrl.Path, "/")
-	return withPrefix(&tikvClient{client.KVStore, interval}, append([]byte(prefix), 0xFD)), nil
+	return withPrefix(&tikvClient{client.KVStore, interval, useLatestPointGet}, append([]byte(prefix), 0xFD)), nil
 }
 
 func parseRequiredUint32(query url.Values, name string) (uint32, error) {
@@ -243,8 +245,9 @@ func (tx *tikvTxn) delete(key []byte) {
 }
 
 type tikvClient struct {
-	client     *tikv.KVStore
-	gcInterval time.Duration
+	client            *tikv.KVStore
+	gcInterval        time.Duration
+	useLatestPointGet bool
 }
 
 func (c *tikvClient) name() string {
@@ -268,7 +271,12 @@ func (c *tikvClient) config(key string) interface{} {
 }
 
 func (c *tikvClient) simpleTxn(ctx context.Context, f func(*kvTxn) error, retry int) (err error) {
-	tx, err := c.client.Begin(tikv.WithStartTS(math.MaxUint64)) // math.MaxUint64 means to point get the latest committed data without PD access
+	var opts []tikv.TxnOption
+	if c.useLatestPointGet {
+		// math.MaxUint64 means to point get the latest committed data without PD access.
+		opts = append(opts, tikv.WithStartTS(math.MaxUint64))
+	}
+	tx, err := c.client.Begin(opts...)
 	if err != nil {
 		return errors.Wrap(err, "failed to begin transaction")
 	}
