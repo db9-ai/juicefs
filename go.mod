@@ -60,7 +60,7 @@ require (
 	github.com/minio/minio-go/v7 v7.0.11-0.20210302210017-6ae69c73ce78
 	github.com/ncw/swift/v2 v2.0.3
 	github.com/oliverisaac/shellescape v0.0.0-20220131224704-1b6c6b87b668
-	github.com/pingcap/kvproto v0.0.0-20260630080527-b4ca3f1805fb
+	github.com/pingcap/kvproto v0.0.0-20260611143855-3566665c9104
 	github.com/pingcap/log v1.1.1-0.20221110025148-ca232912c9f3
 	github.com/pkg/errors v0.9.1
 	github.com/pkg/sftp v1.13.10
@@ -78,8 +78,8 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/studio-b12/gowebdav v0.10.0
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.73
-	github.com/tikv/client-go/v2 v2.0.8-0.20260630103918-3e25ac76da90
-	github.com/tikv/pd/client v0.0.0-20260630080729-de0d6e825733
+	github.com/tikv/client-go/v2 v2.0.8-0.20260618203743-519ae614ed30
+	github.com/tikv/pd/client v0.0.0-20260618194602-729ea141b819
 	github.com/twmb/murmur3 v1.1.8
 	github.com/urfave/cli/v2 v2.19.3
 	github.com/vbauerster/mpb/v7 v7.0.3
