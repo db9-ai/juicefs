@@ -90,6 +90,7 @@ func newTikvClient(addr string) (tkvClient, error) {
 
 	var clientOpts []txnkv.ClientOpt
 	useLatestPointGet := true
+	useFastCommit := true
 	switch query.Get("api-version") {
 	case "v3":
 		namespaceID, err := parseRequiredUint32(query, "namespace-id")
@@ -108,6 +109,7 @@ func newTikvClient(addr string) (tkvClient, error) {
 			txnkv.WithAPIVersion(kvrpcpb.APIVersion_V3),
 		)
 		useLatestPointGet = false
+		useFastCommit = false
 	case "":
 		if ks := query.Get("keyspace"); ks != "" {
 			logger.Infof("Using TiKV API V2 with keyspace: %s", ks)
@@ -146,7 +148,7 @@ func newTikvClient(addr string) (tkvClient, error) {
 	}
 
 	prefix := strings.TrimLeft(tUrl.Path, "/")
-	return withPrefix(&tikvClient{client.KVStore, interval, useLatestPointGet}, append([]byte(prefix), 0xFD)), nil
+	return withPrefix(&tikvClient{client.KVStore, interval, useLatestPointGet, useFastCommit}, append([]byte(prefix), 0xFD)), nil
 }
 
 func parseRequiredUint32(query url.Values, name string) (uint32, error) {
@@ -248,6 +250,7 @@ type tikvClient struct {
 	client            *tikv.KVStore
 	gcInterval        time.Duration
 	useLatestPointGet bool
+	useFastCommit     bool
 }
 
 func (c *tikvClient) name() string {
@@ -322,8 +325,10 @@ func (c *tikvClient) txn(ctx context.Context, f func(*kvTxn) error, retry int) (
 		return err
 	}
 	if !tx.IsReadOnly() {
-		tx.SetEnable1PC(true)
-		tx.SetEnableAsyncCommit(true)
+		if c.useFastCommit {
+			tx.SetEnable1PC(true)
+			tx.SetEnableAsyncCommit(true)
+		}
 		err = tx.Commit(ctx)
 	}
 	return err
