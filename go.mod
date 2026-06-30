@@ -78,7 +78,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/studio-b12/gowebdav v0.10.0
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.73
-	github.com/tikv/client-go/v2 v2.0.8-0.20260630081032-64b22d97898b
+	github.com/tikv/client-go/v2 v2.0.8-0.20260630103918-3e25ac76da90
 	github.com/tikv/pd/client v0.0.0-20260630080729-de0d6e825733
 	github.com/twmb/murmur3 v1.1.8
 	github.com/urfave/cli/v2 v2.19.3
