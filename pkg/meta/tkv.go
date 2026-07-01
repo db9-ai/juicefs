@@ -394,7 +394,14 @@ func (m *kvMeta) parseQuota(buf []byte) *Quota {
 
 func (m *kvMeta) get(key []byte) ([]byte, error) {
 	var value []byte
-	err := m.client.simpleTxn(Background(), func(tx *kvTxn) error {
+	readTxn := m.client.simpleTxn
+	if m.client.name() == "tikv" {
+		// TiKV API V3 applies keyspace identity through the full transaction
+		// path. Keep format loads and other point reads on the same path as
+		// writes so a freshly initialized keyspace can read back its setting.
+		readTxn = m.client.txn
+	}
+	err := readTxn(Background(), func(tx *kvTxn) error {
 		value = tx.get(key)
 		return nil
 	}, 0)
