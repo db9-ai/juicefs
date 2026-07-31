@@ -905,8 +905,13 @@ func (m *baseMeta) refresh(ctx Context) {
 		old := m.getFormat()
 		if format, err := m.Load(false); err != nil {
 			if strings.HasPrefix(err.Error(), "database is not formatted") {
-				logger.Errorf("reload setting: %s", err)
-				os.Exit(UmountCode)
+				// Keep serving with the last known-good format. TiKV API V3
+				// fresh keyspaces can briefly return an empty setting read
+				// after format has already been written and observed by the
+				// mounting path; treating that refresh miss as fatal restarts
+				// long-lived embedders such as fs9 during tenant creation bursts.
+				logger.Warnf("reload setting: %s (keeping existing format)", err)
+				continue
 			}
 			logger.Warnf("reload setting: %s", err)
 		} else if format.MetaVersion > MaxVersion {
