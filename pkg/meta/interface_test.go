@@ -90,6 +90,32 @@ func TestNewClientWithErrorSanitizesCreatorAddressAndPreservesCause(t *testing.T
 	}
 }
 
+func TestNewClientWithErrorDoesNotReplaceShortPasswordOutsideUserinfo(t *testing.T) {
+	const driver = "short-password-driver-for-new-client-test"
+	want := errors.New("backend unavailable")
+	Register(driver, func(_, addr string, _ *Config) (Meta, error) {
+		return nil, fmt.Errorf("connect to %s: %w", addr, want)
+	})
+	t.Cleanup(func() { delete(metaDrivers, driver) })
+
+	client, err := NewClientWithError(driver+"://user:a@metadata", nil)
+	if client != nil {
+		t.Fatal("client must be nil when the creator fails")
+	}
+	if !errors.Is(err, want) {
+		t.Fatalf("expected preserved creator error, got %v", err)
+	}
+	if strings.Contains(err.Error(), "user:a@") {
+		t.Fatalf("creator error exposed metadata password: %v", err)
+	}
+	if !strings.Contains(err.Error(), "user:****@metadata") {
+		t.Fatalf("creator error did not redact userinfo: %v", err)
+	}
+	if !strings.Contains(err.Error(), "backend unavailable") {
+		t.Fatalf("short password corrupted the diagnostic: %v", err)
+	}
+}
+
 func Test_injectPasswordIntoURI(t *testing.T) {
 	const dbPasswd = "dbPasswd"
 	tests := []struct {

@@ -605,7 +605,8 @@ func sanitizeURIError(err error, uri string) error {
 	if safeURI == uri {
 		return err
 	}
-	message := strings.ReplaceAll(err.Error(), uri, safeURI)
+	original := err.Error()
+	message := strings.ReplaceAll(original, uri, safeURI)
 
 	at := strings.LastIndex(uri, "@")
 	schemeEnd := strings.Index(uri, "://") + 3
@@ -614,10 +615,15 @@ func sanitizeURIError(err error, uri string) error {
 	}
 	colon := strings.Index(uri[schemeEnd:], ":")
 	if colon >= 0 {
-		passwordStart := schemeEnd + colon + 1
-		if passwordStart < at {
-			message = strings.ReplaceAll(message, uri[passwordStart:at], "****")
+		userinfoEnd := at + 1
+		if schemeEnd+colon < at {
+			unsafeUserinfo := uri[schemeEnd:userinfoEnd]
+			safeUserinfo := uri[schemeEnd:schemeEnd+colon+1] + "****@"
+			message = strings.ReplaceAll(message, unsafeUserinfo, safeUserinfo)
 		}
+	}
+	if message == original {
+		return err
 	}
 	return &sanitizedError{cause: err, message: message}
 }
