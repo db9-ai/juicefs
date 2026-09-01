@@ -99,7 +99,7 @@ func newTkvClient(driver, addr string) (tkvClient, error) {
 func newKVMeta(driver, addr string, conf *Config) (Meta, error) {
 	client, err := newTkvClient(driver, addr)
 	if err != nil {
-		return nil, fmt.Errorf("connect to addr %s: %s", addr, err)
+		return nil, fmt.Errorf("connect to %s metadata backend: %w", driver, sanitizeURIError(err, addr))
 	}
 	// TODO: ping server and check latency > Millisecond
 	// logger.Warnf("The latency to database is too high: %s", time.Since(start))
@@ -112,6 +112,7 @@ func newKVMeta(driver, addr string, conf *Config) (Meta, error) {
 }
 
 func (m *kvMeta) Shutdown() error {
+	m.shutdownBase()
 	return m.client.close()
 }
 

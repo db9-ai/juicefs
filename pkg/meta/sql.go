@@ -464,7 +464,7 @@ func newSQLMeta(driver, addr string, conf *Config) (Meta, error) {
 
 		parse, err := url.Parse(addr)
 		if err != nil {
-			return nil, fmt.Errorf("parse url %s failed: %s", addr, err)
+			return nil, fmt.Errorf("parse url %s failed: %w", utils.RemovePassword(addr), sanitizeURIError(err, addr))
 		}
 		searchPath = parse.Query().Get("search_path")
 		if searchPath != "" {
@@ -502,7 +502,11 @@ func newSQLMeta(driver, addr string, conf *Config) (Meta, error) {
 	}
 	start := time.Now()
 	if err = engine.Ping(); err != nil {
-		return nil, fmt.Errorf("ping database: %s", err)
+		pingErr := fmt.Errorf("ping database: %w", err)
+		if closeErr := engine.Close(); closeErr != nil {
+			return nil, fmt.Errorf("%w; close failed: %v", pingErr, closeErr)
+		}
+		return nil, pingErr
 	}
 	if time.Since(start) > time.Millisecond*5 {
 		logger.Warnf("The latency to database is too high: %s", time.Since(start))
@@ -540,6 +544,7 @@ func newSQLMeta(driver, addr string, conf *Config) (Meta, error) {
 }
 
 func (m *dbMeta) Shutdown() error {
+	m.shutdownBase()
 	return m.db.Close()
 }
 
