@@ -17,10 +17,42 @@
 package meta
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestNewClientWithErrorRejectsUnknownDriver(t *testing.T) {
+	client, err := NewClientWithError("unknown-driver://metadata", nil)
+	if client != nil {
+		t.Fatal("client must be nil when the driver is unknown")
+	}
+	if err == nil || !strings.Contains(err.Error(), "invalid meta driver: unknown-driver") {
+		t.Fatalf("expected invalid-driver error, got %v", err)
+	}
+}
+
+func TestNewClientWithErrorReturnsCreatorFailure(t *testing.T) {
+	const driver = "failing-driver-for-new-client-test"
+	want := errors.New("backend unavailable")
+	Register(driver, func(_, _ string, _ *Config) (Meta, error) {
+		return nil, want
+	})
+	t.Cleanup(func() { delete(metaDrivers, driver) })
+
+	client, err := NewClientWithError(driver+"://metadata", nil)
+	if client != nil {
+		t.Fatal("client must be nil when the creator fails")
+	}
+	if !errors.Is(err, want) {
+		t.Fatalf("expected wrapped creator error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "meta "+driver+"://metadata is not available") {
+		t.Fatalf("expected safe metadata address context, got %v", err)
+	}
+}
 
 func Test_injectPasswordIntoURI(t *testing.T) {
 	const dbPasswd = "dbPasswd"

@@ -626,26 +626,29 @@ func setPasswordFromEnv(uri string) (string, error) {
 	return injectPasswordIntoURI(uri, password)
 }
 
-// NewClient creates a Meta client for given uri.
-func NewClient(uri string, conf *Config) Meta {
+// NewClientWithError creates a Meta client for the given URI without
+// terminating the process when configuration or backend initialization fails.
+// Long-lived services embedding JuiceFS should use this API so one unavailable
+// metadata backend can be isolated to the affected request.
+func NewClientWithError(uri string, conf *Config) (Meta, error) {
 	var err error
 	if !strings.Contains(uri, "://") {
 		uri = "redis://" + uri
 	}
 	p := strings.Index(uri, "://")
 	if p < 0 {
-		logger.Fatalf("invalid uri: %s", uri)
+		return nil, fmt.Errorf("invalid uri: %s", uri)
 	}
 	driver := uri[:p]
 	if driver == "mysql" || driver == "postgres" {
 		if uri, err = setPasswordFromEnv(uri); err != nil {
-			logger.Fatal(err.Error())
+			return nil, err
 		}
 	}
 	logger.Infof("Meta address: %s", utils.RemovePassword(uri))
 	f, ok := metaDrivers[driver]
 	if !ok {
-		logger.Fatalf("Invalid meta driver: %s", driver)
+		return nil, fmt.Errorf("invalid meta driver: %s", driver)
 	}
 	if conf == nil {
 		conf = DefaultConf()
@@ -654,7 +657,19 @@ func NewClient(uri string, conf *Config) Meta {
 	}
 	m, err := f(driver, uri[p+3:], conf)
 	if err != nil {
-		logger.Fatalf("Meta %s is not available: %s", utils.RemovePassword(uri), err)
+		return nil, fmt.Errorf("meta %s is not available: %w", utils.RemovePassword(uri), err)
+	}
+	return m, nil
+
+}
+
+// NewClient creates a Meta client for the given URI. It preserves the
+// historical command-line behavior of terminating on initialization failure.
+// Long-lived services must use NewClientWithError instead.
+func NewClient(uri string, conf *Config) Meta {
+	m, err := NewClientWithError(uri, conf)
+	if err != nil {
+		logger.Fatal(err.Error())
 	}
 	return m
 }
