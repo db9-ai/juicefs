@@ -572,12 +572,54 @@ type CleanupTrashStats struct {
 	DeletedFiles int64
 }
 
+// Creator constructs a metadata client. Implementations must return
+// initialization failures to the caller, release resources acquired before a
+// failed return, and must not terminate the process. NewClientWithError relies
+// on this contract; NewClient is the boundary that applies the historical
+// command-line fatal policy.
 type Creator func(driver, addr string, conf *Config) (Meta, error)
 
 var metaDrivers = make(map[string]Creator)
 
 func Register(name string, register Creator) {
 	metaDrivers[name] = register
+}
+
+type sanitizedError struct {
+	cause   error
+	message string
+}
+
+func (e *sanitizedError) Error() string { return e.message }
+func (e *sanitizedError) Unwrap() error { return e.cause }
+
+// sanitizeURIError removes URI userinfo passwords from an error string while
+// preserving the original error for errors.Is/errors.As. Creator errors may
+// repeat the address they were given, so sanitization must cover both the full
+// URI at the factory boundary and scheme-less addresses inside KV creators.
+func sanitizeURIError(err error, uri string) error {
+	if err == nil {
+		return nil
+	}
+	safeURI := utils.RemovePassword(uri)
+	if safeURI == uri {
+		return err
+	}
+	message := strings.ReplaceAll(err.Error(), uri, safeURI)
+
+	at := strings.LastIndex(uri, "@")
+	schemeEnd := strings.Index(uri, "://") + 3
+	if schemeEnd == 2 {
+		schemeEnd = 0
+	}
+	colon := strings.Index(uri[schemeEnd:], ":")
+	if colon >= 0 {
+		passwordStart := schemeEnd + colon + 1
+		if passwordStart < at {
+			message = strings.ReplaceAll(message, uri[passwordStart:at], "****")
+		}
+	}
+	return &sanitizedError{cause: err, message: message}
 }
 
 func injectPasswordIntoURI(uri, password string) (string, error) {
@@ -626,10 +668,10 @@ func setPasswordFromEnv(uri string) (string, error) {
 	return injectPasswordIntoURI(uri, password)
 }
 
-// NewClientWithError creates a Meta client for the given URI without
-// terminating the process when configuration or backend initialization fails.
-// Long-lived services embedding JuiceFS should use this API so one unavailable
-// metadata backend can be isolated to the affected request.
+// NewClientWithError creates a Meta client for the given URI and returns URI
+// preprocessing, driver lookup, and Creator errors to the caller. It does not
+// apply a process-exit policy; registered Creator implementations must follow
+// the non-terminating Creator contract above.
 func NewClientWithError(uri string, conf *Config) (Meta, error) {
 	var err error
 	if !strings.Contains(uri, "://") {
@@ -657,6 +699,8 @@ func NewClientWithError(uri string, conf *Config) (Meta, error) {
 	}
 	m, err := f(driver, uri[p+3:], conf)
 	if err != nil {
+		err = sanitizeURIError(err, uri)
+		err = sanitizeURIError(err, uri[p+3:])
 		return nil, fmt.Errorf("meta %s is not available: %w", utils.RemovePassword(uri), err)
 	}
 	return m, nil

@@ -18,6 +18,7 @@ package meta
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,7 +51,42 @@ func TestNewClientWithErrorReturnsCreatorFailure(t *testing.T) {
 		t.Fatalf("expected wrapped creator error, got %v", err)
 	}
 	if !strings.Contains(err.Error(), "meta "+driver+"://metadata is not available") {
-		t.Fatalf("expected safe metadata address context, got %v", err)
+		t.Fatalf("expected metadata address context, got %v", err)
+	}
+}
+
+func TestNewClientWithErrorRedactsRedisParseAddress(t *testing.T) {
+	const secret = "raw-secret"
+	client, err := NewClientWithError("redis://user:"+secret+"%zz@localhost:6379/0", testConfig())
+	if client != nil {
+		t.Fatal("client must be nil when the Redis address is invalid")
+	}
+	if err == nil || !strings.Contains(err.Error(), "url parse redis://user:****@localhost:6379/0") {
+		t.Fatalf("expected redacted Redis parse error, got %v", err)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("Redis parse error exposed metadata password: %v", err)
+	}
+}
+
+func TestNewClientWithErrorSanitizesCreatorAddressAndPreservesCause(t *testing.T) {
+	const driver = "address-repeating-driver-for-new-client-test"
+	const secret = "raw-secret"
+	want := errors.New("backend unavailable")
+	Register(driver, func(_, addr string, _ *Config) (Meta, error) {
+		return nil, fmt.Errorf("connect to %s: %w", addr, want)
+	})
+	t.Cleanup(func() { delete(metaDrivers, driver) })
+
+	client, err := NewClientWithError(driver+"://user:"+secret+"@metadata", nil)
+	if client != nil {
+		t.Fatal("client must be nil when the creator fails")
+	}
+	if !errors.Is(err, want) {
+		t.Fatalf("expected preserved creator error, got %v", err)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("creator error exposed metadata password: %v", err)
 	}
 }
 
