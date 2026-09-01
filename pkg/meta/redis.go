@@ -110,7 +110,7 @@ func newRedisMeta(driver, addr string, conf *Config) (Meta, error) {
 	uri := driver + "://" + addr
 	u, err := url.Parse(uri)
 	if err != nil {
-		return nil, fmt.Errorf("url parse %s: %s", uri, err)
+		return nil, fmt.Errorf("url parse %s: %w", utils.RemovePassword(uri), sanitizeURIError(err, uri))
 	}
 	values := u.Query()
 	query := queryMap{&values}
@@ -137,7 +137,7 @@ func newRedisMeta(driver, addr string, conf *Config) (Meta, error) {
 	hosts := u.Host
 	opt, err := redis.ParseURL(u.String())
 	if err != nil {
-		return nil, fmt.Errorf("redis parse %s: %s", uri, err)
+		return nil, fmt.Errorf("redis parse %s: %w", utils.RemovePassword(uri), sanitizeURIError(err, uri))
 	}
 	if opt.TLSConfig != nil {
 		opt.TLSConfig.ServerName = tlsServerName // use the host of each connection as ServerName
@@ -276,11 +276,14 @@ func newRedisMeta(driver, addr string, conf *Config) (Meta, error) {
 		}
 	}
 
-	m := &redisMeta{
-		baseMeta: newBaseMeta(addr, conf),
-		rdb:      rdb,
-		prefix:   prefix,
+	m := &redisMeta{rdb: rdb, prefix: prefix}
+	if err := m.checkServerConfig(); err != nil {
+		if cleanupErr := rdb.Close(); cleanupErr != nil {
+			return nil, fmt.Errorf("validate Redis server: %w; cleanup failed: %v", err, cleanupErr)
+		}
+		return nil, fmt.Errorf("validate Redis server: %w", err)
 	}
+	m.baseMeta = newBaseMeta(addr, conf)
 	if clientCache {
 		m.cache = newRedisCache(prefix, clientCacheSize, clientCacheExpiry, clientCachePreload)
 		if err = m.cache.init(m.rdb); err != nil {
@@ -289,7 +292,6 @@ func newRedisMeta(driver, addr string, conf *Config) (Meta, error) {
 		}
 	}
 	m.en = m
-	m.checkServerConfig()
 	return m, nil
 }
 
@@ -4338,15 +4340,15 @@ func (m *redisMeta) cleanUgUsage(ctx Context, qtype uint32) error {
 	})
 }
 
-func (m *redisMeta) checkServerConfig() {
+func (m *redisMeta) checkServerConfig() error {
 	rawInfo, err := m.rdb.Info(Background()).Result()
 	if err != nil {
 		logger.Warnf("parse info: %s", err)
-		return
+		return nil
 	}
 	rInfo, err := checkRedisInfo(rawInfo)
 	if err != nil {
-		logger.Warnf("parse info: %s", err)
+		return err
 	}
 	if rInfo.storageProvider == "" && rInfo.maxMemoryPolicy != "" && rInfo.maxMemoryPolicy != "noeviction" {
 		logger.Warnf("maxmemory_policy is %q,  we will try to reconfigure it to 'noeviction'.", rInfo.maxMemoryPolicy)
@@ -4364,9 +4366,10 @@ func (m *redisMeta) checkServerConfig() {
 	_, err = m.rdb.Ping(Background()).Result()
 	if err != nil {
 		logger.Errorf("Ping redis: %s", err.Error())
-		return
+		return nil
 	}
 	logger.Infof("Ping redis latency: %s", time.Since(start))
+	return nil
 }
 
 func (m *redisMeta) dumpEntries(es ...*DumpedEntry) error {

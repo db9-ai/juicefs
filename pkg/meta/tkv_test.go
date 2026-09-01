@@ -20,13 +20,39 @@ package meta
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/dgraph-io/badger/v4"
 )
+
+func TestNewKVMetaReturnsCreatorErrorWithoutRawAddress(t *testing.T) {
+	const driver = "failing-kv-driver-for-client-test"
+	const addr = "user:raw-secret@metadata.example:2379/keyspace"
+	want := errors.New("backend unavailable")
+	drivers[driver] = func(got string) (tkvClient, error) {
+		if got != addr {
+			t.Fatalf("creator address = %q, want %q", got, addr)
+		}
+		return nil, fmt.Errorf("backend %s unavailable: %w", got, want)
+	}
+	t.Cleanup(func() { delete(drivers, driver) })
+
+	client, err := newKVMeta(driver, addr, testConfig())
+	if client != nil {
+		t.Fatal("client must be nil when the KV creator fails")
+	}
+	if !errors.Is(err, want) {
+		t.Fatalf("expected wrapped creator error, got %v", err)
+	}
+	if strings.Contains(err.Error(), "raw-secret") {
+		t.Fatalf("creator error exposed raw metadata address: %v", err)
+	}
+}
 
 func TestMemKVClient(t *testing.T) {
 	_ = os.Remove(settingPath)

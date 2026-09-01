@@ -23,7 +23,32 @@ import (
 	"path"
 	"strings"
 	"testing"
+
+	"xorm.io/xorm"
 )
+
+func TestNewSQLMetaClosesEngineAfterPingFailure(t *testing.T) {
+	engine, err := xorm.NewEngine("mysql", "root@tcp(127.0.0.1:1)/db?timeout=10ms")
+	if err != nil {
+		t.Fatalf("create test engine: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+
+	const driver = "failing-sql-driver-for-client-test"
+	engineCreator[driver] = func(string) (*xorm.Engine, error) { return engine, nil }
+	t.Cleanup(func() { delete(engineCreator, driver) })
+
+	client, err := newSQLMeta(driver, "metadata", testConfig())
+	if client != nil {
+		t.Fatal("client must be nil when SQL ping fails")
+	}
+	if err == nil || !strings.Contains(err.Error(), "ping database") {
+		t.Fatalf("expected database ping error, got %v", err)
+	}
+	if err := engine.Ping(); err == nil || !strings.Contains(err.Error(), "database is closed") {
+		t.Fatalf("failed engine was not closed: %v", err)
+	}
+}
 
 func TestSQLiteClient(t *testing.T) {
 	m, err := newSQLMeta("sqlite3", path.Join(t.TempDir(), "jfs-unit-test.db"), testConfig())
