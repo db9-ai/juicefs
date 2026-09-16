@@ -572,12 +572,60 @@ type CleanupTrashStats struct {
 	DeletedFiles int64
 }
 
+// Creator constructs a metadata client. Implementations must return
+// initialization failures to the caller, release resources acquired before a
+// failed return, and must not terminate the process. NewClientWithError relies
+// on this contract; NewClient is the boundary that applies the historical
+// command-line fatal policy.
 type Creator func(driver, addr string, conf *Config) (Meta, error)
 
 var metaDrivers = make(map[string]Creator)
 
 func Register(name string, register Creator) {
 	metaDrivers[name] = register
+}
+
+type sanitizedError struct {
+	cause   error
+	message string
+}
+
+func (e *sanitizedError) Error() string { return e.message }
+func (e *sanitizedError) Unwrap() error { return e.cause }
+
+// sanitizeURIError removes URI userinfo passwords from an error string while
+// preserving the original error for errors.Is/errors.As. Creator errors may
+// repeat the address they were given, so sanitization must cover both the full
+// URI at the factory boundary and scheme-less addresses inside KV creators.
+func sanitizeURIError(err error, uri string) error {
+	if err == nil {
+		return nil
+	}
+	safeURI := utils.RemovePassword(uri)
+	if safeURI == uri {
+		return err
+	}
+	original := err.Error()
+	message := strings.ReplaceAll(original, uri, safeURI)
+
+	at := strings.LastIndex(uri, "@")
+	schemeEnd := strings.Index(uri, "://") + 3
+	if schemeEnd == 2 {
+		schemeEnd = 0
+	}
+	colon := strings.Index(uri[schemeEnd:], ":")
+	if colon >= 0 {
+		userinfoEnd := at + 1
+		if schemeEnd+colon < at {
+			unsafeUserinfo := uri[schemeEnd:userinfoEnd]
+			safeUserinfo := uri[schemeEnd:schemeEnd+colon+1] + "****@"
+			message = strings.ReplaceAll(message, unsafeUserinfo, safeUserinfo)
+		}
+	}
+	if message == original {
+		return err
+	}
+	return &sanitizedError{cause: err, message: message}
 }
 
 func injectPasswordIntoURI(uri, password string) (string, error) {
@@ -626,26 +674,29 @@ func setPasswordFromEnv(uri string) (string, error) {
 	return injectPasswordIntoURI(uri, password)
 }
 
-// NewClient creates a Meta client for given uri.
-func NewClient(uri string, conf *Config) Meta {
+// NewClientWithError creates a Meta client for the given URI and returns URI
+// preprocessing, driver lookup, and Creator errors to the caller. It does not
+// apply a process-exit policy; registered Creator implementations must follow
+// the non-terminating Creator contract above.
+func NewClientWithError(uri string, conf *Config) (Meta, error) {
 	var err error
 	if !strings.Contains(uri, "://") {
 		uri = "redis://" + uri
 	}
 	p := strings.Index(uri, "://")
 	if p < 0 {
-		logger.Fatalf("invalid uri: %s", uri)
+		return nil, fmt.Errorf("invalid uri: %s", uri)
 	}
 	driver := uri[:p]
 	if driver == "mysql" || driver == "postgres" {
 		if uri, err = setPasswordFromEnv(uri); err != nil {
-			logger.Fatal(err.Error())
+			return nil, err
 		}
 	}
 	logger.Infof("Meta address: %s", utils.RemovePassword(uri))
 	f, ok := metaDrivers[driver]
 	if !ok {
-		logger.Fatalf("Invalid meta driver: %s", driver)
+		return nil, fmt.Errorf("invalid meta driver: %s", driver)
 	}
 	if conf == nil {
 		conf = DefaultConf()
@@ -654,7 +705,21 @@ func NewClient(uri string, conf *Config) Meta {
 	}
 	m, err := f(driver, uri[p+3:], conf)
 	if err != nil {
-		logger.Fatalf("Meta %s is not available: %s", utils.RemovePassword(uri), err)
+		err = sanitizeURIError(err, uri)
+		err = sanitizeURIError(err, uri[p+3:])
+		return nil, fmt.Errorf("meta %s is not available: %w", utils.RemovePassword(uri), err)
+	}
+	return m, nil
+
+}
+
+// NewClient creates a Meta client for the given URI. It preserves the
+// historical command-line behavior of terminating on initialization failure.
+// Long-lived services must use NewClientWithError instead.
+func NewClient(uri string, conf *Config) Meta {
+	m, err := NewClientWithError(uri, conf)
+	if err != nil {
+		logger.Fatal(err.Error())
 	}
 	return m
 }

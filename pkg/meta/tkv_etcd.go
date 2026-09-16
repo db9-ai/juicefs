@@ -29,6 +29,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juicedata/juicefs/pkg/utils"
 	"github.com/pkg/errors"
 	etcd "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/pkg/transport"
@@ -309,7 +310,7 @@ func newEtcdClient(addr string) (tkvClient, error) {
 	}
 	u, err := url.Parse(addr)
 	if err != nil {
-		return nil, fmt.Errorf("parse %s: %s", addr, err)
+		return nil, fmt.Errorf("parse etcd metadata address %s: %w", utils.RemovePassword(addr), sanitizeURIError(err, addr))
 	}
 	passwd, _ := u.User.Password()
 	hosts := strings.Split(u.Host, ",")
