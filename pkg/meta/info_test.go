@@ -16,7 +16,10 @@
 
 package meta
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestOlderThan(t *testing.T) {
 	v := redisVersion{"2.2.10", 2, 2}
@@ -65,6 +68,13 @@ func TestParseRedisVersion(t *testing.T) {
 }
 
 func TestParseRedisInfo(t *testing.T) {
+	t.Run("Should return an error instead of terminating for an unsupported version", func(t *testing.T) {
+		_, err := checkRedisInfo("redis_version:3.2.0")
+		if err == nil || !strings.Contains(err.Error(), "Redis version should not be older than 4.0.x") {
+			t.Fatalf("expected unsupported-version error, got %v", err)
+		}
+	})
+
 	t.Run("Should parse the fields we are interested in", func(t *testing.T) {
 		input := `# Server
 	redis_version:6.1.240
