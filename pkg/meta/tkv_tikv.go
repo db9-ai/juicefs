@@ -28,14 +28,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	plog "github.com/pingcap/log"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/tikv/client-go/v2/config"
-	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
+	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/txnutil"
 	pd "github.com/tikv/pd/client"
@@ -262,6 +263,10 @@ func (c *tikvClient) txn(ctx context.Context, f func(*kvTxn) error, retry int) (
 	tx, err := c.client.Begin(opts...)
 	if err != nil {
 		return err
+	}
+	// Preserve request-scoped RPC observation for both snapshot reads and commit.
+	if observer := interceptor.GetRPCInterceptorFromCtx(ctx); observer != nil {
+		tx.SetRPCInterceptor(observer)
 	}
 	defer func() {
 		if r := recover(); r != nil {
