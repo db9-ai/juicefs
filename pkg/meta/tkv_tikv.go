@@ -282,8 +282,12 @@ func (c *tikvClient) txn(ctx context.Context, f func(*kvTxn) error, retry int) (
 		return err
 	}
 	if !tx.IsReadOnly() {
-		tx.SetEnable1PC(true)
-		tx.SetEnableAsyncCommit(true)
+		// Keep the client's default 2PC protocol. CSE currently selects 1PC
+		// and async-commit timestamps using a store-wide max_ts, although TSO
+		// keyspace groups advance independently. Such a commit can be newer
+		// than our next transaction's snapshot, hiding a just-created parent.
+		// 2PC allocates commitTS from the same TSO as the following startTS.
+		// See https://github.com/tidbcloud/cloud-storage-engine/issues/2977.
 		err = tx.Commit(ctx)
 	}
 	return err
