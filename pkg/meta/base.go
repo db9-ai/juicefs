@@ -534,6 +534,11 @@ func (m *baseMeta) InitSharedMetrics(reg prometheus.Registerer) {
 	if reg == nil {
 		return
 	}
+	ctx := m.sessCtx
+	if ctx == nil {
+		logger.Warnf("InitSharedMetrics called before NewSession; skip shared metrics initialization")
+		return
+	}
 
 	reg.MustRegister(m.usedSpaceG)
 	reg.MustRegister(m.usedInodesG)
@@ -562,9 +567,11 @@ func (m *baseMeta) InitSharedMetrics(reg prometheus.Registerer) {
 	}
 	m.subdirInfoG.WithLabelValues(subdir).Set(1)
 
+	m.sessWG.Add(1)
 	go func() {
+		defer m.sessWG.Done()
 		for {
-			if m.sessCtx != nil && m.sessCtx.Canceled() {
+			if ctx.Canceled() {
 				return
 			}
 			var totalSpace, availSpace, iused, iavail uint64
@@ -576,19 +583,38 @@ func (m *baseMeta) InitSharedMetrics(reg prometheus.Registerer) {
 				m.totalInodesG.Set(float64(iused + iavail))
 			}
 			m.updateQuotaMetrics()
-			utils.SleepWithJitter(time.Second * 10)
+			if !sleepWithJitterContext(ctx, time.Second*10) {
+				return
+			}
 		}
 	}()
 
+	m.sessWG.Add(1)
 	go func() {
+		defer m.sessWG.Done()
 		for {
-			if m.sessCtx != nil && m.sessCtx.Canceled() {
+			if ctx.Canceled() {
 				return
 			}
 			m.cleanupQuotaMetrics()
-			utils.SleepWithJitter(time.Hour)
+			if !sleepWithJitterContext(ctx, time.Hour) {
+				return
+			}
 		}
 	}()
+}
+
+func sleepWithJitterContext(ctx Context, d time.Duration) bool {
+	if ctx == nil {
+		utils.SleepWithJitter(d)
+		return true
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(utils.JitterIt(d)):
+		return true
+	}
 }
 
 func (m *baseMeta) InitMetrics(reg prometheus.Registerer) {
@@ -739,6 +765,7 @@ func (m *baseMeta) newSessionInfo() []byte {
 func (m *baseMeta) NewSession(record bool) error {
 	m.sessCtx = Background()
 	ctx := m.sessCtx
+	m.sessWG.Add(1)
 	go m.refresh(ctx)
 
 	if err := m.en.cacheACLs(ctx); err != nil {
@@ -848,15 +875,32 @@ func (m *baseMeta) OnReload(fn func(f *Format)) {
 
 const UmountCode = 11
 
+type transientUnformattedRefresh interface {
+	tolerateTransientUnformattedRefresh() bool
+}
+
+// engineToleratesTransientUnformattedRefresh is intentionally not a *baseMeta
+// method. Redis and SQL embed *baseMeta and point en at themselves, so a
+// promoted method would recurse instead of falling through to exit 11.
+func engineToleratesTransientUnformattedRefresh(en engine) bool {
+	p, ok := en.(transientUnformattedRefresh)
+	return ok && p.tolerateTransientUnformattedRefresh()
+}
+
 func (m *baseMeta) refresh(ctx Context) {
+	defer m.sessWG.Done()
 	for {
 		if ctx.Canceled() {
 			return
 		}
 		if m.conf.Heartbeat > 0 {
-			utils.SleepWithJitter(m.conf.Heartbeat)
+			if !sleepWithJitterContext(ctx, m.conf.Heartbeat) {
+				return
+			}
 		} else { // use default value
-			utils.SleepWithJitter(time.Second * 12)
+			if !sleepWithJitterContext(ctx, time.Second*12) {
+				return
+			}
 		}
 		m.sesMu.Lock()
 		if m.umounting {
@@ -873,6 +917,14 @@ func (m *baseMeta) refresh(ctx Context) {
 		old := m.getFormat()
 		if format, err := m.Load(false); err != nil {
 			if strings.HasPrefix(err.Error(), "database is not formatted") {
+				// Only TiKV API V3 can observe a transient empty setting after
+				// format has already been written. Every other engine, including
+				// default TiKV and API V2 keyspace URLs, still treats a missing
+				// format as fatal so supervision can remount.
+				if engineToleratesTransientUnformattedRefresh(m.en) {
+					logger.Warnf("reload setting: %s (keeping existing format)", err)
+					continue
+				}
 				logger.Errorf("reload setting: %s", err)
 				os.Exit(UmountCode)
 			}
@@ -943,11 +995,20 @@ func (m *baseMeta) CloseSession() error {
 	if m.sid > 0 {
 		err = m.en.doCleanStaleSession(m.sid)
 	}
-	m.sessCtx.Cancel()
+	if m.sessCtx != nil {
+		m.sessCtx.Cancel()
+	}
 	m.sessWG.Wait()
 	m.stopDeleteSliceTasks()
+	m.shutdownBase()
 	logger.Infof("close session %d: %v", m.sid, err)
 	return err
+}
+
+func (m *baseMeta) shutdownBase() {
+	if m.of != nil {
+		m.of.Shutdown()
+	}
 }
 
 func (m *baseMeta) FlushSession() {
@@ -2052,6 +2113,13 @@ func (m *baseMeta) Read(ctx Context, inode Ino, indx uint32, slices *[]Slice) (s
 		go m.compactChunk(inode, indx, false, false, tierID)
 	}
 	return 0
+}
+
+func (m *baseMeta) AdvanceNextChunk(offset int64) (int64, error) {
+	if offset == 0 {
+		return m.en.getCounter("nextChunk")
+	}
+	return m.en.incrCounter("nextChunk", offset)
 }
 
 func (m *baseMeta) NewSlice(ctx Context, id *uint64) syscall.Errno {
