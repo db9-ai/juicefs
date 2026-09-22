@@ -89,11 +89,11 @@ func checkRedisInfo(rawInfo string) (info redisInfo, err error) {
 			info.redisVersion = val
 			ver, err := parseRedisVersion(val)
 			if err != nil {
-				logger.Warnf("Failed to parse Redis server version %q: %s", ver, err)
-			} else {
-				if ver.olderThan(oldestSupportedVer) {
-					logger.Fatalf("Redis version should not be older than %s", oldestSupportedVer)
-				}
+				// Unparseable version strings were historically a warning.
+				// Only a parsed version older than the support floor is fatal.
+				logger.Warnf("Failed to parse Redis server version %q: %s", val, err)
+			} else if ver.olderThan(oldestSupportedVer) {
+				return info, fmt.Errorf("Redis version should not be older than %s", oldestSupportedVer)
 			}
 		case "storage_provider":
 			// if storage_provider is none reset it to ""

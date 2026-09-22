@@ -108,6 +108,13 @@ func (c *prefixClient) reset(prefix []byte) error {
 	return c.tkvClient.reset(c.prefix)
 }
 
+func (c *prefixClient) tolerateTransientUnformattedRefresh() bool {
+	if p, ok := c.tkvClient.(transientUnformattedRefresh); ok {
+		return p.tolerateTransientUnformattedRefresh()
+	}
+	return false
+}
+
 func withPrefix(client tkvClient, prefix []byte) tkvClient {
 	return &prefixClient{client, prefix}
 }
