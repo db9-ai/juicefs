@@ -135,6 +135,15 @@ func newTikvClient(addr string) (tkvClient, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The bundled PD client enables its router by default and then calls
+	// QueryRegion. Clusters that only implement classic GetRegion reject that
+	// RPC, and the metadata read retries until it fails with an empty error.
+	// Keep the previous region lookup path unless a future client can detect
+	// QueryRegion support. API V3 already disables the router at construction.
+	if err := client.KVStore.GetPDClient().UpdateOption(pdopt.EnableRouterClient, false); err != nil {
+		client.Close()
+		return nil, errors.Wrap(err, "disable PD router client")
+	}
 
 	if strings.ToLower(query.Get("open-tso-follower-proxy")) == "true" {
 		if err := client.KVStore.GetPDClient().UpdateOption(pdopt.EnableTSOFollowerProxy, true); err != nil {
