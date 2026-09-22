@@ -24,21 +24,22 @@ import (
 	"math"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	plog "github.com/pingcap/log"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/tikv/client-go/v2/config"
-	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/txnutil"
-	pd "github.com/tikv/pd/client"
+	pdopt "github.com/tikv/pd/client/opt"
 	"go.uber.org/zap"
 )
 
@@ -88,12 +89,37 @@ func newTikvClient(addr string) (tkvClient, error) {
 	logger.Infof("TiKV gc interval is set to %s", interval)
 
 	var clientOpts []txnkv.ClientOpt
-	if ks := query.Get("keyspace"); ks != "" {
-		logger.Infof("Using TiKV API V2 with keyspace: %s", ks)
+	useLatestPointGet := true
+	useFastCommit := true
+	switch query.Get("api-version") {
+	case "v3":
+		namespaceID, err := parseRequiredUint32(query, "namespace-id")
+		if err != nil {
+			return nil, err
+		}
+		keyspaceID, err := parseRequiredUint32(query, "keyspace-id")
+		if err != nil {
+			return nil, err
+		}
+		ks := query.Get("keyspace")
+		logger.Infof("Using TiKV API V3 with namespace-id: %d, keyspace-id: %d, keyspace: %s", namespaceID, keyspaceID, ks)
 		clientOpts = append(clientOpts,
 			txnkv.WithKeyspace(ks),
-			txnkv.WithAPIVersion(kvrpcpb.APIVersion_V2),
+			txnkv.WithKeyspaceIdentity(namespaceID, keyspaceID),
+			txnkv.WithAPIVersion(kvrpcpb.APIVersion_V3),
 		)
+		useLatestPointGet = false
+		useFastCommit = false
+	case "":
+		if ks := query.Get("keyspace"); ks != "" {
+			logger.Infof("Using TiKV API V2 with keyspace: %s", ks)
+			clientOpts = append(clientOpts,
+				txnkv.WithKeyspace(ks),
+				txnkv.WithAPIVersion(kvrpcpb.APIVersion_V2),
+			)
+		}
+	default:
+		return nil, errors.Errorf("unsupported TiKV api-version: %s", query.Get("api-version"))
 	}
 
 	client, err := txnkv.NewClient(strings.Split(tUrl.Host, ","), clientOpts...)
@@ -102,7 +128,7 @@ func newTikvClient(addr string) (tkvClient, error) {
 	}
 
 	if strings.ToLower(query.Get("open-tso-follower-proxy")) == "true" {
-		if err := client.KVStore.GetPDClient().UpdateOption(pd.EnableTSOFollowerProxy, true); err != nil {
+		if err := client.KVStore.GetPDClient().UpdateOption(pdopt.EnableTSOFollowerProxy, true); err != nil {
 			logger.Warnf("Failed to enable TSO Follower Proxy: %v", err)
 		} else {
 			logger.Infof("Enabling TSO Follower Proxy")
@@ -111,7 +137,7 @@ func newTikvClient(addr string) (tkvClient, error) {
 
 	if waitStr := query.Get("max-tso-batch-wait-interval"); waitStr != "" {
 		if waitDur, err := time.ParseDuration(waitStr); err == nil {
-			if err := client.KVStore.GetPDClient().UpdateOption(pd.MaxTSOBatchWaitInterval, waitDur); err != nil {
+			if err := client.KVStore.GetPDClient().UpdateOption(pdopt.MaxTSOBatchWaitInterval, waitDur); err != nil {
 				logger.Warnf("Failed to set MaxTSOBatchWaitInterval: %v", err)
 			} else {
 				logger.Infof("Set MaxTSOBatchWaitInterval to %s", waitDur)
@@ -122,7 +148,22 @@ func newTikvClient(addr string) (tkvClient, error) {
 	}
 
 	prefix := strings.TrimLeft(tUrl.Path, "/")
-	return withPrefix(&tikvClient{client.KVStore, interval}, append([]byte(prefix), 0xFD)), nil
+	return withPrefix(&tikvClient{client.KVStore, interval, useLatestPointGet, useFastCommit}, append([]byte(prefix), 0xFD)), nil
+}
+
+func parseRequiredUint32(query url.Values, name string) (uint32, error) {
+	value := query.Get(name)
+	if value == "" {
+		return 0, errors.Errorf("missing TiKV API V3 %s", name)
+	}
+	parsed, err := strconv.ParseUint(value, 10, 32)
+	if err != nil {
+		return 0, errors.Wrapf(err, "invalid TiKV API V3 %s", name)
+	}
+	if parsed == 0 {
+		return 0, errors.Errorf("TiKV API V3 %s must be non-zero", name)
+	}
+	return uint32(parsed), nil
 }
 
 type tikvTxn struct {
@@ -137,7 +178,7 @@ func (tx *tikvTxn) get(key []byte) []byte {
 	if err != nil {
 		panic(err)
 	}
-	return value
+	return value.Value
 }
 
 func (tx *tikvTxn) gets(keys ...[]byte) [][]byte {
@@ -147,7 +188,7 @@ func (tx *tikvTxn) gets(keys ...[]byte) [][]byte {
 	}
 	values := make([][]byte, len(keys))
 	for i, key := range keys {
-		values[i] = ret[string(key)]
+		values[i] = ret[string(key)].Value
 	}
 	return values
 }
@@ -206,8 +247,10 @@ func (tx *tikvTxn) delete(key []byte) {
 }
 
 type tikvClient struct {
-	client     *tikv.KVStore
-	gcInterval time.Duration
+	client            *tikv.KVStore
+	gcInterval        time.Duration
+	useLatestPointGet bool
+	useFastCommit     bool
 }
 
 func (c *tikvClient) name() string {
@@ -231,7 +274,12 @@ func (c *tikvClient) config(key string) interface{} {
 }
 
 func (c *tikvClient) simpleTxn(ctx context.Context, f func(*kvTxn) error, retry int) (err error) {
-	tx, err := c.client.Begin(tikv.WithStartTS(math.MaxUint64)) // math.MaxUint64 means to point get the latest committed data without PD access
+	var opts []tikv.TxnOption
+	if c.useLatestPointGet {
+		// math.MaxUint64 means to point get the latest committed data without PD access.
+		opts = append(opts, tikv.WithStartTS(math.MaxUint64))
+	}
+	tx, err := c.client.Begin(opts...)
 	if err != nil {
 		return errors.Wrap(err, "failed to begin transaction")
 	}
@@ -277,8 +325,10 @@ func (c *tikvClient) txn(ctx context.Context, f func(*kvTxn) error, retry int) (
 		return err
 	}
 	if !tx.IsReadOnly() {
-		tx.SetEnable1PC(true)
-		tx.SetEnableAsyncCommit(true)
+		if c.useFastCommit {
+			tx.SetEnable1PC(true)
+			tx.SetEnableAsyncCommit(true)
+		}
 		err = tx.Commit(ctx)
 	}
 	return err
