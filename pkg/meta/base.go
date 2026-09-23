@@ -2837,7 +2837,7 @@ func (m *baseMeta) compactChunk(inode Ino, indx uint32, once, force bool, tierID
 		m.Unlock()
 	}()
 
-	ss, st := m.en.doRead(Background(), inode, indx)
+	ss, st := m.en.doRead(ctx, inode, indx)
 	if st != 0 {
 		return
 	}
@@ -2882,13 +2882,13 @@ func (m *baseMeta) compactChunk(inode Ino, indx uint32, once, force bool, tierID
 		}()
 	}
 	var id uint64
-	if st = m.NewSlice(Background(), &id); st != 0 {
+	if st = m.NewSlice(ctx, &id); st != 0 {
 		return
 	}
 	logger.Debugf("compact %d:%d: skipped %d slices (%d bytes) %d slices (%d bytes)", inode, indx, skipped, pos, len(compacted), size)
 	if tierID == -1 {
 		var attr Attr
-		if eno := m.GetAttr(Background(), inode, &attr); eno != 0 {
+		if eno := m.GetAttr(ctx, inode, &attr); eno != 0 {
 			return
 		}
 		tierID = int(attr.Tier)

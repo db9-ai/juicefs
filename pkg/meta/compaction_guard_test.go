@@ -17,6 +17,7 @@
 package meta
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"syscall"
@@ -189,4 +190,56 @@ func TestForcedCompactionReleasesGuardBeforeNextPass(t *testing.T) {
 	m.compactChunk(inode, 0, false, true, 0)
 	require.Equal(t, 2, passes)
 	require.False(t, held)
+}
+
+// Block the real allocator transaction boundary, not the compaction callback:
+// cancellation must reach a cache refill before any object upload starts.
+type blockedCompactionAllocator struct {
+	tkvClient
+	entered chan context.Context
+	release chan struct{}
+}
+
+func (c *blockedCompactionAllocator) txn(ctx context.Context, f func(*kvTxn) error, retry int) error {
+	c.entered <- ctx
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.release:
+		return errors.New("allocator fixture released")
+	}
+}
+
+func TestCloseSessionCancelsCompactionAllocatorRefill(t *testing.T) {
+	guardCtx := make(chan Context, 1)
+	m, inode := newCompactionGuardMeta(t, func(ctx Context) (func(), error) {
+		guardCtx <- ctx
+		return func() {}, nil
+	})
+	blocked := &blockedCompactionAllocator{
+		tkvClient: m.conf.SliceAllocator.store.client,
+		entered:   make(chan context.Context, 1), release: make(chan struct{}),
+	}
+	m.conf.SliceAllocator.store.client = blocked
+	m.OnMsg(CompactChunk, func(...interface{}) error {
+		t.Error("canceled allocator refill reached the upload callback")
+		return nil
+	})
+	compacted := make(chan struct{})
+	go func() { m.compactChunk(inode, 0, false, false, 0); close(compacted) }()
+	allocatorCtx := <-blocked.entered
+	sessionCtx := <-guardCtx
+	closed := make(chan error, 1)
+	go func() { closed <- m.CloseSession() }()
+	<-sessionCtx.Done()
+	select {
+	case <-allocatorCtx.Done():
+	case <-time.After(100 * time.Millisecond):
+		t.Error("session cancellation did not reach the compaction allocator")
+	}
+	// Always release the fixture, so the negative case reports its assertion
+	// instead of hanging test cleanup while CloseSession waits for compaction.
+	close(blocked.release)
+	<-compacted
+	require.NoError(t, <-closed)
 }
