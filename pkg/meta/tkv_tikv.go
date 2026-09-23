@@ -192,10 +192,11 @@ func parseRequiredUint32(query url.Values, name string) (uint32, error) {
 
 type tikvTxn struct {
 	*tikv.KVTxn
+	ctx context.Context
 }
 
 func (tx *tikvTxn) get(key []byte) []byte {
-	value, err := tx.Get(context.TODO(), key)
+	value, err := tx.Get(tx.ctx, key)
 	if tikverr.IsErrNotFound(err) {
 		return nil
 	}
@@ -206,7 +207,7 @@ func (tx *tikvTxn) get(key []byte) []byte {
 }
 
 func (tx *tikvTxn) gets(keys ...[]byte) [][]byte {
-	ret, err := tx.BatchGet(context.TODO(), keys)
+	ret, err := tx.BatchGet(tx.ctx, keys)
 	if err != nil {
 		panic(err)
 	}
@@ -321,7 +322,7 @@ func (c *tikvClient) simpleTxn(ctx context.Context, f func(*kvTxn) error, retry 
 			}
 		}
 	}()
-	if err = f(&kvTxn{&tikvTxn{tx}, retry}); err != nil {
+	if err = f(&kvTxn{&tikvTxn{KVTxn: tx, ctx: ctx}, retry}); err != nil {
 		return err
 	}
 	if !tx.IsReadOnly() {
@@ -350,7 +351,7 @@ func (c *tikvClient) txn(ctx context.Context, f func(*kvTxn) error, retry int) (
 			}
 		}
 	}()
-	if err = f(&kvTxn{&tikvTxn{tx}, retry}); err != nil {
+	if err = f(&kvTxn{&tikvTxn{KVTxn: tx, ctx: ctx}, retry}); err != nil {
 		return err
 	}
 	if !tx.IsReadOnly() {
