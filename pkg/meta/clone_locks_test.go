@@ -3,13 +3,16 @@ package meta
 import (
 	"bytes"
 	"context"
+	"sync"
 	"syscall"
 	"testing"
+
+	"github.com/google/btree"
 )
 
 func TestRawCloneLocksUsePhysicalIdentity(t *testing.T) {
-	sourceClient, _ := newTkvClient("memkv", "")
-	targetClient, _ := newTkvClient("memkv", "")
+	sourceClient := &memKV{items: btree.New(2), temp: &kvItem{}}
+	targetClient := &memKV{items: btree.New(2), temp: &kvItem{}}
 	newMeta := func(client tkvClient, scope string) *kvMeta {
 		m := &kvMeta{baseMeta: newBaseMeta("", DefaultConf()), client: client, lockNamespace: scope}
 		m.en = m
@@ -68,7 +71,7 @@ func TestRawCloneLocksUsePhysicalIdentity(t *testing.T) {
 }
 
 func TestScopedLockSessionCleanup(t *testing.T) {
-	c, _ := newTkvClient("memkv", "")
+	c := &memKV{items: btree.New(2), temp: &kvItem{}}
 	m := &kvMeta{baseMeta: newBaseMeta("", DefaultConf()), client: c, lockNamespace: "target"}
 	m.en = m
 	m.fmt = &Format{MetaVersion: 2}
@@ -111,4 +114,33 @@ func TestLegacyLockKeysRemainCompatible(t *testing.T) {
 	if !bytes.Equal(m.flockKey(42), m.fmtKey("F", Ino(42))) || !bytes.Equal(m.plockKey(42), m.fmtKey("P", Ino(42))) {
 		t.Fatal("legacy lock encoding changed")
 	}
+}
+
+// Refresh replaces the format pointer while ordinary lock RPCs are admitted.
+func TestScopedLocksDuringFormatRefresh(t *testing.T) {
+	c := &memKV{items: btree.New(2), temp: &kvItem{}}
+	c.set("setting", []byte(`{"Name":"refresh","MetaVersion":2}`))
+	m := &kvMeta{baseMeta: newBaseMeta("", DefaultConf()), client: c, lockNamespace: "physical"}
+	m.en = m
+	if _, err := m.Load(false); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			if _, err := m.Load(false); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+	}()
+	for i := 0; i < 1000; i++ {
+		if st := m.Flock(Background(), RootInode, 77, syscall.F_RDLCK, false); st != 0 {
+			t.Error(st)
+			break
+		}
+	}
+	wg.Wait()
 }

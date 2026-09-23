@@ -248,7 +248,7 @@ func (m *kvMeta) xattrKey(inode Ino, name string) []byte {
 // rows cannot admit or block operations in a different physical keyspace.
 // Version 1 retains its existing wire layout; upgrading requires a writer drain.
 func (m *kvMeta) lockPrefix(kind string) []byte {
-	if m.fmt.MetaVersion == 2 && m.lockNamespace != "" {
+	if m.lockNamespace != "" && m.getFormat().MetaVersion == 2 {
 		return m.fmtKey(kind, "2/", m.lockNamespace, "/")
 	}
 	return m.fmtKey(kind)
@@ -415,8 +415,12 @@ func (m *kvMeta) parseQuota(buf []byte) *Quota {
 }
 
 func (m *kvMeta) get(key []byte) ([]byte, error) {
+	return m.getContext(Background(), key)
+}
+
+func (m *kvMeta) getContext(ctx context.Context, key []byte) ([]byte, error) {
 	var value []byte
-	err := m.client.simpleTxn(Background(), func(tx *kvTxn) error {
+	err := m.client.simpleTxn(ctx, func(tx *kvTxn) error {
 		value = tx.get(key)
 		return nil
 	}, 0)
@@ -2324,7 +2328,7 @@ func (m *kvMeta) doDeleteSustainedInode(sid uint64, inode Ino) error {
 }
 
 func (m *kvMeta) doRead(ctx Context, inode Ino, indx uint32) ([]*slice, syscall.Errno) {
-	val, err := m.get(m.chunkKey(inode, indx))
+	val, err := m.getContext(ctx, m.chunkKey(inode, indx))
 	if err != nil {
 		return nil, errno(err)
 	}
@@ -3062,7 +3066,7 @@ func (m *kvMeta) doRepair(ctx Context, inode Ino, attr *Attr) syscall.Errno {
 func (m *kvMeta) GetXattr(ctx Context, inode Ino, name string, vbuff *[]byte) syscall.Errno {
 	defer m.timeit("GetXattr", time.Now())
 	inode = m.checkRoot(inode)
-	buf, err := m.get(m.xattrKey(inode, name))
+	buf, err := m.getContext(ctx, m.xattrKey(inode, name))
 	if err != nil {
 		return errno(err)
 	}

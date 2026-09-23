@@ -243,3 +243,60 @@ func TestCloseSessionCancelsCompactionAllocatorRefill(t *testing.T) {
 	<-compacted
 	require.NoError(t, <-closed)
 }
+
+type blockedCompactionRead struct {
+	tkvClient
+	entered chan context.Context
+	release chan struct{}
+}
+
+func (c *blockedCompactionRead) simpleTxn(ctx context.Context, f func(*kvTxn) error, retry int) error {
+	c.entered <- ctx
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.release:
+		return errors.New("fixture released")
+	}
+}
+func TestCloseSessionCancelsCompactionMetadataRead(t *testing.T) {
+	conf := DefaultConf()
+	conf.NoBGJob, conf.MaxDeletes = true, 0
+	client, err := newKVMeta("memkv", t.Name(), conf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := client.(*kvMeta)
+	defer m.Shutdown()
+	if err := m.Init(&Format{Name: "compaction-cancel", MetaVersion: 1}, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Load(true); err != nil {
+		t.Fatal(err)
+	}
+	blocked := &blockedCompactionRead{tkvClient: m.client, entered: make(chan context.Context, 1), release: make(chan struct{})}
+	m.client = blocked
+	compacted := make(chan struct{})
+	go func() { m.compactChunk(RootInode, 0, false, false, 0); close(compacted) }()
+	readCtx := <-blocked.entered
+	closed := make(chan error, 1)
+	go func() { closed <- m.CloseSession() }()
+	select {
+	case <-readCtx.Done():
+	case <-time.After(300 * time.Millisecond):
+		t.Error("CloseSession cancellation did not reach compaction metadata read")
+	}
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Error(err)
+		}
+	case <-time.After(300 * time.Millisecond):
+		t.Error("CloseSession blocked on uncancellable compaction metadata read")
+		close(blocked.release)
+		if err := <-closed; err != nil {
+			t.Error(err)
+		}
+	}
+	<-compacted
+}
