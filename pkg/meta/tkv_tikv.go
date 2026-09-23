@@ -121,13 +121,6 @@ func newTikvClient(addr string) (tkvClient, error) {
 		interval = 0
 	case "":
 		if ks := query.Get("keyspace"); ks != "" {
-			// Keyspaces can use independent PD TSO groups, while TiKV's
-			// concurrency-manager max_ts is shared across them. 1PC/async
-			// commit can therefore choose a commit timestamp ahead of this
-			// keyspace's next snapshot and break read-after-write visibility.
-			// Use 2PC so the commit timestamp comes from the same TSO domain
-			// as subsequent metadata transactions.
-			useFastCommit = false
 			logger.Infof("Using TiKV API V2 with keyspace: %s", ks)
 			clientOpts = append(clientOpts,
 				txnkv.WithKeyspace(ks),
