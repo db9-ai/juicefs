@@ -991,14 +991,17 @@ func (m *baseMeta) CloseSession() error {
 	m.sesMu.Lock()
 	m.umounting = true
 	m.sesMu.Unlock()
+	m.Lock()
+	if m.sessCtx == nil {
+		m.sessCtx = Background()
+	}
+	m.sessCtx.Cancel()
+	m.Unlock()
+	m.sessWG.Wait()
 	var err error
 	if m.sid > 0 {
 		err = m.en.doCleanStaleSession(m.sid)
 	}
-	if m.sessCtx != nil {
-		m.sessCtx.Cancel()
-	}
-	m.sessWG.Wait()
 	m.stopDeleteSliceTasks()
 	m.shutdownBase()
 	logger.Infof("close session %d: %v", m.sid, err)
@@ -2814,9 +2817,21 @@ func (m *baseMeta) compactChunk(inode Ino, indx uint32, once, force bool, tierID
 		m.Unlock()
 		return
 	}
+	if m.sessCtx != nil && m.sessCtx.Canceled() {
+		m.Unlock()
+		return
+	}
+	// Register under the same lock used by CloseSession to stop admission.
+	// Read-triggered compactions otherwise outlive the metadata client.
+	if m.sessCtx == nil {
+		m.sessCtx = Background()
+	}
+	ctx := m.sessCtx
+	m.sessWG.Add(1)
 	m.compacting[k] = true
 	m.Unlock()
 	defer func() {
+		defer m.sessWG.Done()
 		m.Lock()
 		delete(m.compacting, k)
 		m.Unlock()
@@ -2852,6 +2867,20 @@ func (m *baseMeta) compactChunk(inode Ino, indx uint32, once, force bool, tierID
 		}
 	}
 
+	var release func()
+	if m.conf.CompactionGuard != nil {
+		var err error
+		release, err = m.conf.CompactionGuard(ctx)
+		if err != nil {
+			logger.Debugf("compaction admission for %d:%d: %s", inode, indx, err)
+			return
+		}
+		defer func() {
+			if release != nil {
+				release()
+			}
+		}()
+	}
 	var id uint64
 	if st = m.NewSlice(Background(), &id); st != 0 {
 		return
@@ -2897,6 +2926,10 @@ func (m *baseMeta) compactChunk(inode Ino, indx uint32, once, force bool, tierID
 	}
 
 	if force {
+		if release != nil {
+			release()
+			release = nil
+		}
 		m.Lock()
 		delete(m.compacting, k)
 		m.Unlock()

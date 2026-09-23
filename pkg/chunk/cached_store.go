@@ -237,13 +237,14 @@ func freePage(p *Page) {
 // slice for write only
 type wSlice struct {
 	rSlice
-	pages       [][]*Page
-	uploaded    int
-	errors      chan error
-	uploadError error
-	pendings    int
-	writeback   bool
-	tierID      uint8
+	pages        [][]*Page
+	uploaded     int
+	errors       chan error
+	uploadError  error
+	uploadFailed atomic.Bool
+	pendings     int
+	writeback    bool
+	tierID       uint8
 }
 
 func sliceForWrite(id uint64, store *cachedStore, tierID uint8) *wSlice {
@@ -313,24 +314,24 @@ func (store *cachedStore) put(ctx context.Context, key string, p *Page) error {
 	if store.upLimit != nil {
 		store.upLimit.Wait(int64(len(p.Data)))
 	}
-	p.Acquire()
+	// Do not detach the physical PUT on timeout: callers use upload completion
+	// as the boundary after which an aborted/retired slice cannot create objects.
+	ctx, cancel := context.WithTimeout(ctx, store.conf.PutTimeout)
+	defer cancel()
 	var (
 		reqID string
 		sc    = object.DefaultStorageClass
 	)
-	return utils.WithTimeout(ctx, func(ctx context.Context) error {
-		defer p.Release()
-		st := time.Now()
-		err := store.storage.Put(ctx, key, bytes.NewReader(p.Data), object.WithRequestID(&reqID), object.WithStorageClass(&sc))
-		used := time.Since(st)
-		logRequest("PUT", key, "", reqID, err, used)
-		store.objectDataBytes.WithLabelValues("PUT", sc).Add(float64(len(p.Data)))
-		store.objectReqsHistogram.WithLabelValues("PUT", sc).Observe(used.Seconds())
-		if err != nil {
-			store.objectReqErrors.Add(1)
-		}
-		return err
-	}, store.conf.PutTimeout)
+	st := time.Now()
+	err := store.storage.Put(ctx, key, bytes.NewReader(p.Data), object.WithRequestID(&reqID), object.WithStorageClass(&sc))
+	used := time.Since(st)
+	logRequest("PUT", key, "", reqID, err, used)
+	store.objectDataBytes.WithLabelValues("PUT", sc).Add(float64(len(p.Data)))
+	store.objectReqsHistogram.WithLabelValues("PUT", sc).Observe(used.Seconds())
+	if err != nil {
+		store.objectReqErrors.Add(1)
+	}
+	return err
 }
 
 func (store *cachedStore) delete(key string) error {
@@ -382,7 +383,7 @@ func (store *cachedStore) upload(ctx context.Context, key string, block *Page, s
 	}
 	for ; try < max; try++ {
 		time.Sleep(time.Second * time.Duration(try*try))
-		if s != nil && s.uploadError != nil {
+		if s != nil && s.uploadFailed.Load() {
 			err = fmt.Errorf("(cancelled) upload block %s: %s (after %d tries)", key, err, try)
 			break
 		}
@@ -523,16 +524,26 @@ func (s *wSlice) Finish(length int) error {
 	if err := s.FlushTo(n * s.store.conf.BlockSize); err != nil {
 		return err
 	}
-	for i := 0; i < s.pendings; i++ {
-		if err := <-s.errors; err != nil {
+	return s.waitUploads()
+}
+
+// Drain even after the first error. In non-writeback mode every result is
+// sent only after its physical PUT returns, so cleanup cannot race a late PUT.
+func (s *wSlice) waitUploads() error {
+	for s.pendings > 0 {
+		err := <-s.errors
+		s.pendings--
+		if err != nil && s.uploadError == nil {
 			s.uploadError = err
-			return err
+			s.uploadFailed.Store(true)
 		}
 	}
-	return nil
+	return s.uploadError
 }
 
 func (s *wSlice) Abort() {
+	s.uploadFailed.Store(true)
+	_ = s.waitUploads()
 	for i := range s.pages {
 		for _, b := range s.pages[i] {
 			freePage(b)

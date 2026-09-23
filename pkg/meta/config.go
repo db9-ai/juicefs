@@ -36,6 +36,12 @@ import (
 
 // Config for clients.
 type Config struct {
+	// CompactionGuard optionally admits a physical compaction. Its release
+	// function runs after both object uploads and their metadata commit finish.
+	// The context is canceled when the metadata session closes. A rejected
+	// admission leaves the existing slices unchanged. The hook must not change
+	// after the client starts; nil preserves the default compaction behavior.
+	CompactionGuard func(Context) (release func(), err error) `json:"-"`
 	// SliceAllocator is required for metadata v2. It is never copied in snapshots.
 	SliceAllocator     *SliceAllocator
 	Retries            int
