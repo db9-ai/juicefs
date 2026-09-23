@@ -36,6 +36,8 @@ import (
 
 // Config for clients.
 type Config struct {
+	// SliceAllocator is required for metadata v2. It is never copied in snapshots.
+	SliceAllocator     *SliceAllocator
 	Retries            int
 	MaxDeletes         int
 	SkipDirNlink       int
@@ -75,6 +77,8 @@ func (c *Config) SelfCheck() {
 }
 
 type Format struct {
+	// SliceAllocator is the immutable physical-family identity in control metadata.
+	SliceAllocator   string `json:",omitempty"`
 	Name             string
 	UUID             string
 	Storage          string
@@ -115,6 +119,8 @@ func (f *Format) update(old *Format, force bool) error {
 	} else {
 		var args []interface{}
 		switch {
+		case f.SliceAllocator != old.SliceAllocator:
+			args = []interface{}{"slice allocator", old.SliceAllocator, f.SliceAllocator}
 		case f.Name != old.Name:
 			args = []interface{}{"name", old.Name, f.Name}
 		case f.BlockSize != old.BlockSize:
@@ -165,6 +171,13 @@ func (f *Format) String() string {
 }
 
 func (f *Format) CheckVersion() error {
+	if f.MetaVersion == 2 {
+		if _, err := sliceAllocatorKey(f.SliceAllocator); err != nil {
+			return err
+		}
+	} else if f.SliceAllocator != "" {
+		return fmt.Errorf("shared slice allocator requires metadata version 2")
+	}
 	if f.MetaVersion > MaxVersion {
 		return fmt.Errorf("incompatible metadata version: %d; please upgrade the client", f.MetaVersion)
 	}

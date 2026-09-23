@@ -2116,6 +2116,20 @@ func (m *baseMeta) Read(ctx Context, inode Ino, indx uint32, slices *[]Slice) (s
 }
 
 func (m *baseMeta) AdvanceNextChunk(offset int64) (int64, error) {
+	f, loadErr := m.Load(true)
+	if loadErr != nil {
+		return 0, loadErr
+	}
+	if f.MetaVersion == 2 {
+		if offset != 0 {
+			return 0, fmt.Errorf("fixed slice offsets are forbidden with shared allocation")
+		}
+		if m.conf.SliceAllocator == nil {
+			return 0, fmt.Errorf("shared slice allocator unavailable")
+		}
+		next, err := m.conf.SliceAllocator.Reserve(Background(), f.SliceAllocator, 0)
+		return int64(next), err
+	}
 	if offset == 0 {
 		return m.en.getCounter("nextChunk")
 	}
@@ -2126,12 +2140,31 @@ func (m *baseMeta) NewSlice(ctx Context, id *uint64) syscall.Errno {
 	m.freeMu.Lock()
 	defer m.freeMu.Unlock()
 	if m.freeSlices.next >= m.freeSlices.maxid {
-		v, err := m.en.incrCounter("nextChunk", sliceIdBatch)
-		if err != nil {
-			return errno(err)
+		f := m.getFormat()
+		if f == nil {
+			var err error
+			f, err = m.Load(true)
+			if err != nil {
+				return syscall.EIO
+			}
 		}
-		m.freeSlices.next = uint64(v) - sliceIdBatch
-		m.freeSlices.maxid = uint64(v)
+		if f.MetaVersion == 2 {
+			if m.conf.SliceAllocator == nil {
+				return syscall.EIO
+			}
+			start, err := m.conf.SliceAllocator.Reserve(ctx, f.SliceAllocator, sliceIdBatch)
+			if err != nil {
+				logger.Errorf("reserve shared slices: %s", err)
+				return syscall.EIO
+			}
+			m.freeSlices = freeID{next: start, maxid: start + sliceIdBatch}
+		} else {
+			v, err := m.en.incrCounter("nextChunk", sliceIdBatch)
+			if err != nil {
+				return errno(err)
+			}
+			m.freeSlices = freeID{next: uint64(v) - sliceIdBatch, maxid: uint64(v)}
+		}
 	}
 	*id = m.freeSlices.next
 	m.freeSlices.next++
