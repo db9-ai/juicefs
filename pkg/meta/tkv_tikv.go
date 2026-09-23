@@ -21,6 +21,7 @@ package meta
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"net/url"
 	"os"
@@ -167,8 +168,16 @@ func newTikvClient(addr string) (tkvClient, error) {
 	}
 
 	prefix := strings.TrimLeft(tUrl.Path, "/")
+	// The codec holds the resolved physical identity, so PD endpoint aliases or
+	// a renamed keyspace cannot split a volume's lock domain. Including the
+	// cluster and metadata path also separates restores across clusters or
+	// prefixes. This identity is runtime configuration, never snapshot data.
+	codec := client.KVStore.GetPDClient().(*tikv.CodecPDClient).GetCodec()
+	lockNamespace := fmt.Sprintf("%d/%d/%d/%x/%x", client.GetPDClient().GetClusterID(context.Background()),
+		codec.GetAPIVersion(), codec.GetKeyspaceMeta().GetKeyspaceIdentity().GetNamespaceId(), codec.GetKeyspace(), prefix)
 	return withPrefix(&tikvClient{
 		client:                     client.KVStore,
+		lockNamespace:              lockNamespace,
 		gcInterval:                 interval,
 		useLatestPointGet:          useLatestPointGet,
 		useFastCommit:              useFastCommit,
@@ -274,6 +283,7 @@ func (tx *tikvTxn) delete(key []byte) {
 
 type tikvClient struct {
 	client                     *tikv.KVStore
+	lockNamespace              string
 	gcInterval                 time.Duration
 	useLatestPointGet          bool
 	useFastCommit              bool
@@ -293,6 +303,9 @@ func (c *tikvClient) shouldRetry(err error) bool {
 }
 
 func (c *tikvClient) config(key string) interface{} {
+	if key == "lockNamespace" {
+		return c.lockNamespace
+	}
 	if key == "startTS" {
 		ts, err := c.client.CurrentTimestamp(oracle.GlobalTxnScope)
 		if err != nil {

@@ -79,8 +79,9 @@ func (tx *kvTxn) deleteKeys(prefix []byte) {
 
 type kvMeta struct {
 	*baseMeta
-	client tkvClient
-	snap   map[Ino]*DumpedEntry
+	client        tkvClient
+	lockNamespace string
+	snap          map[Ino]*DumpedEntry
 }
 
 var _ Meta = (*kvMeta)(nil)
@@ -107,6 +108,7 @@ func newKVMeta(driver, addr string, conf *Config) (Meta, error) {
 		baseMeta: newBaseMeta(addr, conf),
 		client:   client,
 	}
+	m.lockNamespace, _ = client.config("lockNamespace").(string)
 	m.en = m
 	return m, nil
 }
@@ -194,6 +196,8 @@ All keys:
   Diiiiiiiillllllll  delete inodes
   Fiiiiiiii          Flocks
   Piiiiiiii          POSIX locks
+  F2/<scope>/iiiiiiii v2 TiKV Flocks, scoped to physical metadata identity
+  P2/<scope>/iiiiiiii v2 TiKV POSIX locks, same scope
   Kccccccccnnnn      slice refs
   Lttttttttcccccccc  delayed slices
   SEssssssss         session expire time
@@ -239,12 +243,23 @@ func (m *kvMeta) xattrKey(inode Ino, name string) []byte {
 	return m.fmtKey("A", inode, "X", name)
 }
 
+// lockPrefix binds v2 coordination to the actual metadata backend identity,
+// not the cloned format UUID. Raw snapshots retain source lock rows, but those
+// rows cannot admit or block operations in a different physical keyspace.
+// Version 1 retains its existing wire layout; upgrading requires a writer drain.
+func (m *kvMeta) lockPrefix(kind string) []byte {
+	if m.fmt.MetaVersion == 2 && m.lockNamespace != "" {
+		return m.fmtKey(kind, "2/", m.lockNamespace, "/")
+	}
+	return m.fmtKey(kind)
+}
+
 func (m *kvMeta) flockKey(inode Ino) []byte {
-	return m.fmtKey("F", inode)
+	return append(m.lockPrefix("F"), m.fmtKey(inode)...)
 }
 
 func (m *kvMeta) plockKey(inode Ino) []byte {
-	return m.fmtKey("P", inode)
+	return append(m.lockPrefix("P"), m.fmtKey(inode)...)
 }
 
 func (m *kvMeta) sessionKey(sid uint64) []byte {
@@ -620,7 +635,7 @@ func (m *kvMeta) doCleanStaleSession(sid uint64) error {
 	var fail bool
 	// release locks
 	ctx := Background()
-	if flocks, err := m.scanValues(ctx, m.fmtKey("F"), -1, nil); err == nil {
+	if flocks, err := m.scanValues(ctx, m.lockPrefix("F"), -1, nil); err == nil {
 		for k, v := range flocks {
 			ls := unmarshalFlock(v)
 			for o := range ls {
@@ -647,7 +662,7 @@ func (m *kvMeta) doCleanStaleSession(sid uint64) error {
 		fail = true
 	}
 
-	if plocks, err := m.scanValues(ctx, m.fmtKey("P"), -1, nil); err == nil {
+	if plocks, err := m.scanValues(ctx, m.lockPrefix("P"), -1, nil); err == nil {
 		for k, v := range plocks {
 			ls := unmarshalPlock(v)
 			for o := range ls {
@@ -749,12 +764,12 @@ func (m *kvMeta) getSession(sid uint64, detail bool) (*Session, error) {
 			inode := m.decodeInode(sinode[10:]) // "SS" + sid
 			s.Sustained = append(s.Sustained, inode)
 		}
-		flocks, err := m.scanValues(ctx, m.fmtKey("F"), -1, nil)
+		flocks, err := m.scanValues(ctx, m.lockPrefix("F"), -1, nil)
 		if err != nil {
 			return nil, err
 		}
 		for k, v := range flocks {
-			inode := m.decodeInode([]byte(k[1:])) // "F"
+			inode := m.decodeInode([]byte(k[len(m.lockPrefix("F")):]))
 			ls := unmarshalFlock(v)
 			for o, l := range ls {
 				if o.sid == sid {
@@ -762,12 +777,12 @@ func (m *kvMeta) getSession(sid uint64, detail bool) (*Session, error) {
 				}
 			}
 		}
-		plocks, err := m.scanValues(ctx, m.fmtKey("P"), -1, nil)
+		plocks, err := m.scanValues(ctx, m.lockPrefix("P"), -1, nil)
 		if err != nil {
 			return nil, err
 		}
 		for k, v := range plocks {
-			inode := m.decodeInode([]byte(k[1:])) // "P"
+			inode := m.decodeInode([]byte(k[len(m.lockPrefix("P")):]))
 			ls := unmarshalPlock(v)
 			for o, l := range ls {
 				if o.sid == sid {
