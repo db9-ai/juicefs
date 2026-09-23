@@ -22,6 +22,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -187,4 +188,51 @@ func TestSliceConcurrentFinishAbortJoinsUpload(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Abort stuck after physical PUT and Finish both returned")
 	}
+}
+
+func TestSliceAbortCancelsQueuedUploadWhileFinishWaits(t *testing.T) {
+	mem, err := object.CreateStorage("mem", "", "", "", "")
+	require.NoError(t, err)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	var calls atomic.Int32
+	blob := &controlledPutStorage{ObjectStorage: mem}
+	blob.put = func(ctx context.Context, key string, in io.Reader, attrs ...object.AttrGetter) error {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+		}
+		return mem.Put(context.Background(), key, in, attrs...)
+	}
+	conf := defaultConf
+	conf.CacheDir, conf.MaxUpload = "memory", 1
+	store := NewCachedStore(blob, conf, nil).(*cachedStore)
+	defer store.Close()
+	defer releaseOnce.Do(func() { close(release) })
+	writer := store.NewWriter(24, 0).(*wSlice)
+	_, err = writer.WriteAt(make([]byte, 2*conf.BlockSize), 0)
+	require.NoError(t, err)
+	finished, aborted := make(chan error, 1), make(chan struct{})
+	go func() { finished <- writer.Finish(2 * conf.BlockSize) }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("Finish did not enter the physical PUT")
+	}
+	go func() { writer.Abort(); close(aborted) }()
+	require.Eventually(t, writer.uploadFailed.Load, time.Second, time.Millisecond,
+		"Abort must signal cancellation while Finish still owns finalization")
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case err := <-finished:
+		require.ErrorContains(t, err, "cancelled")
+	case <-time.After(time.Second):
+		t.Fatal("Finish did not drain the canceled queued upload")
+	}
+	select {
+	case <-aborted:
+	case <-time.After(time.Second):
+		t.Fatal("Abort did not finish after the active upload completed")
+	}
+	require.EqualValues(t, 1, calls.Load(), "the queued upload must not start a second PUT")
 }
