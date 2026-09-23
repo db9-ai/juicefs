@@ -2893,7 +2893,7 @@ func (m *baseMeta) compactChunk(inode Ino, indx uint32, once, force bool, tierID
 		}
 		tierID = int(attr.Tier)
 	}
-	err := m.newMsg(CompactChunk, slices, id, uint8(tierID))
+	err := m.newMsg(CompactChunk, slices, id, uint8(tierID), ctx)
 	if err != nil {
 		if !strings.Contains(err.Error(), "not exist") && !strings.Contains(err.Error(), "not found") {
 			logger.Warnf("compact %d %d with %d slices: %s", inode, indx, len(compacted), err)

@@ -41,7 +41,9 @@ const (
 	ChunkSize = 1 << ChunkBits // 64M
 	// DeleteSlice is a message to delete a slice from object store.
 	DeleteSlice = 1000
-	// CompactChunk is a message to compact a chunk in object store.
+	// CompactChunk requests object-store compaction with ([]Slice, uint64 ID,
+	// uint8 tier, Context). The trailing context cancels pre-upload work;
+	// callbacks must join started uploads before returning.
 	CompactChunk = 1001
 	// Rmr is a message to remove a directory recursively.
 	Rmr = 1002
