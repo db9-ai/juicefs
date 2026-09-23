@@ -1164,10 +1164,13 @@ func (m *kvMeta) doReadlink(ctx Context, inode Ino, noatime bool) (atime int64, 
 }
 
 func (m *kvMeta) doMknod(ctx Context, parent Ino, name string, _type uint8, mode, cumask uint16, path string, inode *Ino, attr *Attr) syscall.Errno {
-	return errno(m.txn(ctx, func(tx *kvTxn) error {
+	var missingParent bool
+	create := func(tx *kvTxn) error {
+		missingParent = false
 		var pattr Attr
 		rs := tx.gets(m.inodeKey(parent), m.entryKey(parent, name))
 		if rs[0] == nil {
+			missingParent = true
 			return syscall.ENOENT
 		}
 		m.parseAttr(rs[0], &pattr)
@@ -1289,7 +1292,36 @@ func (m *kvMeta) doMknod(ctx Context, parent Ino, name string, _type uint8, mode
 			tx.set(m.dirStatKey(*inode), m.packDirStat(&dirStat{}))
 		}
 		return nil
-	}, parent))
+	}
+	for attempt := 0; ; attempt++ {
+		err := m.txn(ctx, create, parent)
+		if err != syscall.ENOENT || !missingParent || m.Name() != "tikv" || attempt == 2 ||
+			ctx.Value(txSessionKey{}) != nil || ctx.Value(txMaxRetryKey{}) != nil {
+			return errno(err)
+		}
+		// A TiKV snapshot can miss a committed parent that a point lookup sees.
+		// Retry only this exact missing-inode branch: it exits before any writes
+		// or Commit. Recheck the same inode (not the path, which may be replaced),
+		// and never retry other ENOENTs, commit errors, or caller-pinned snapshots.
+		var visible bool
+		if err := m.client.simpleTxn(ctx, func(tx *kvTxn) error {
+			visible = tx.get(m.inodeKey(parent)) != nil
+			return nil
+		}, 0); err != nil {
+			return errno(err)
+		}
+		if !visible {
+			return syscall.ENOENT
+		}
+		logger.Warnf("Mknod parent %d missing from transaction but present in point lookup; retry %d/2", parent, attempt+1)
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return syscall.EINTR
+		case <-timer.C:
+		}
+	}
 }
 
 func (m *kvMeta) doUnlink(ctx Context, parent Ino, name string, attr *Attr, skipCheckTrash ...bool) syscall.Errno {
