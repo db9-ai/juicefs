@@ -129,3 +129,23 @@ func TestSharedSliceAllocatorAcrossClonedCounters(t *testing.T) {
 		t.Fatal("v2 without allocator fell back to private counter")
 	}
 }
+
+func TestSharedSliceAllocatorFormatGuard(t *testing.T) {
+	if err := (&Format{MetaVersion: 2}).CheckVersion(); err == nil {
+		t.Fatal("v2 without family identity accepted")
+	}
+	if err := (&Format{MetaVersion: 1, SliceAllocator: fmt.Sprintf("%064x", 1)}).CheckVersion(); err == nil {
+		t.Fatal("legacy version hides allocator requirement")
+	}
+	conf := DefaultConf()
+	conf.ReadOnly = true
+	m, err := newKVMeta("memkv", "readonly", conf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Shutdown()
+	var id uint64
+	if st := m.NewSlice(Background(), &id); st == 0 {
+		t.Fatal("read-only metadata allocated a slice")
+	}
+}

@@ -2137,6 +2137,9 @@ func (m *baseMeta) AdvanceNextChunk(offset int64) (int64, error) {
 }
 
 func (m *baseMeta) NewSlice(ctx Context, id *uint64) syscall.Errno {
+	if m.conf.ReadOnly {
+		return syscall.EROFS
+	}
 	m.freeMu.Lock()
 	defer m.freeMu.Unlock()
 	if m.freeSlices.next >= m.freeSlices.maxid {
