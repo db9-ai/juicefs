@@ -21,6 +21,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -136,4 +137,54 @@ func TestCachedStorePutTimeoutDoesNotDetachUpload(t *testing.T) {
 	require.NoError(t, <-done)
 	_, err = mem.Head(context.Background(), "chunks/late")
 	require.NoError(t, err)
+}
+
+func TestSliceConcurrentFinishAbortJoinsUpload(t *testing.T) {
+	mem, err := object.CreateStorage("mem", "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, release, returned := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	blob := &controlledPutStorage{ObjectStorage: mem}
+	blob.put = func(ctx context.Context, key string, r io.Reader, attrs ...object.AttrGetter) error {
+		close(entered)
+		<-release
+		defer close(returned)
+		return mem.Put(context.Background(), key, r, attrs...)
+	}
+	conf := defaultConf
+	conf.CacheDir = "memory"
+	store := NewCachedStore(blob, conf, nil).(*cachedStore)
+	defer store.Close()
+	defer releaseOnce.Do(func() { close(release) })
+	writer := store.NewWriter(23, 0)
+	if _, err := writer.WriteAt([]byte("x"), 0); err != nil {
+		t.Fatal(err)
+	}
+	finished, aborted := make(chan error, 1), make(chan struct{})
+	go func() { finished <- writer.Finish(1) }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("fixture did not enter PUT")
+	}
+	go func() { writer.Abort(); close(aborted) }()
+	time.Sleep(50 * time.Millisecond)
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("fixture PUT did not return")
+	}
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("Finish stuck after physical PUT returned")
+	}
+	select {
+	case <-aborted:
+	case <-time.After(time.Second):
+		t.Fatal("Abort stuck after physical PUT and Finish both returned")
+	}
 }

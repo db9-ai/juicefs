@@ -237,6 +237,10 @@ func freePage(p *Page) {
 // slice for write only
 type wSlice struct {
 	rSlice
+	// VFS shutdown can abort a slice while its flush goroutine is in Finish.
+	// Serialize finalization so only one caller drains upload results or frees
+	// pages. Neither path calls back into VFS while holding this mutex.
+	finishMu     sync.Mutex
 	pages        [][]*Page
 	uploaded     int
 	errors       chan error
@@ -516,6 +520,8 @@ func (s *wSlice) FlushTo(offset int) error {
 }
 
 func (s *wSlice) Finish(length int) error {
+	s.finishMu.Lock()
+	defer s.finishMu.Unlock()
 	if s.length != length {
 		return fmt.Errorf("Length mismatch: %v != %v", s.length, length)
 	}
@@ -542,7 +548,11 @@ func (s *wSlice) waitUploads() error {
 }
 
 func (s *wSlice) Abort() {
+	// Signal cancellation before waiting for Finish, so queued uploads and
+	// retries can stop while the active physical PUT is still being joined.
 	s.uploadFailed.Store(true)
+	s.finishMu.Lock()
+	defer s.finishMu.Unlock()
 	_ = s.waitUploads()
 	for i := range s.pages {
 		for _, b := range s.pages[i] {
