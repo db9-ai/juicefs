@@ -38,6 +38,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv"
+	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnutil"
 	pdopt "github.com/tikv/pd/client/opt"
 	"go.uber.org/zap"
@@ -303,13 +304,27 @@ func (c *tikvClient) config(key string) interface{} {
 	return nil
 }
 
+// beginTxn obtains a timestamp with the caller's cancellation before Begin.
+// The SDK's implicit timestamp path uses a background context. A supplied
+// session timestamp or latest-read sentinel must retain its existing semantics.
+func (c *tikvClient) beginTxn(ctx context.Context, startTS uint64) (*tikv.KVTxn, error) {
+	if startTS == 0 {
+		var err error
+		startTS, err = c.client.GetTimestampWithRetry(tikv.NewBackoffer(ctx, transaction.TsoMaxBackoff), oracle.GlobalTxnScope)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return c.client.Begin(tikv.WithStartTS(startTS))
+}
+
 func (c *tikvClient) simpleTxn(ctx context.Context, f func(*kvTxn) error, retry int) (err error) {
-	var opts []tikv.TxnOption
+	var startTS uint64
 	if c.useLatestPointGet {
 		// math.MaxUint64 means to point get the latest committed data without PD access.
-		opts = append(opts, tikv.WithStartTS(math.MaxUint64))
+		startTS = math.MaxUint64
 	}
-	tx, err := c.client.Begin(opts...)
+	tx, err := c.beginTxn(ctx, startTS)
 	if err != nil {
 		return errors.Wrap(err, "failed to begin transaction")
 	}
@@ -332,12 +347,12 @@ func (c *tikvClient) simpleTxn(ctx context.Context, f func(*kvTxn) error, retry 
 }
 
 func (c *tikvClient) txn(ctx context.Context, f func(*kvTxn) error, retry int) (err error) {
-	var opts []tikv.TxnOption
+	var startTS uint64
 	if val := ctx.Value(txSessionKey{}); val != nil {
-		opts = append(opts, tikv.WithStartTS(val.(uint64)))
+		startTS = val.(uint64)
 	}
 
-	tx, err := c.client.Begin(opts...)
+	tx, err := c.beginTxn(ctx, startTS)
 	if err != nil {
 		return err
 	}
