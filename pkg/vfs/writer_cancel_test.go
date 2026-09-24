@@ -413,7 +413,7 @@ func TestDataWriterCloseJoinsRealTimedOutUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 	blob := &lateClosePut{ObjectStorage: mem, entered: make(chan struct{}), release: make(chan struct{}), returned: make(chan struct{})}
-	conf := &chunk.Config{CacheDir: "memory", CacheSize: 1 << 20, BlockSize: 1 << 20, Compress: "none", MaxUpload: 1, MaxDownload: 1, MaxRetries: 1, BufferSize: 32 << 20, PutTimeout: 20 * time.Millisecond}
+	conf := &chunk.Config{JoinUploads: true, CacheDir: "memory", CacheSize: 1 << 20, BlockSize: 1 << 20, Compress: "none", MaxUpload: 1, MaxDownload: 1, MaxRetries: 1, BufferSize: 32 << 20, PutTimeout: 20 * time.Millisecond}
 	store := chunk.NewCachedStore(blob, *conf, nil)
 	var releaseOnce sync.Once
 	defer store.(io.Closer).Close()

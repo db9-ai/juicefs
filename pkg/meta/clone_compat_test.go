@@ -41,9 +41,9 @@ func TestLegacyAllocationCompatibility(t *testing.T) {
 	require.NoError(t, legacy.Init(&Format{Name: "legacy", MetaVersion: 1}, false))
 	body, err := legacy.doLoad()
 	require.NoError(t, err)
-	var legacyID uint64
-	require.Zero(t, legacy.NewSlice(ctx, &legacyID))
-	require.Equal(t, uint64(1), legacyID)
+	var id uint64
+	require.Zero(t, legacy.NewSlice(ctx, &id))
+	require.Equal(t, uint64(1), id)
 	counter, err := legacy.getCounter("nextChunk")
 	require.NoError(t, err)
 
@@ -51,33 +51,48 @@ func TestLegacyAllocationCompatibility(t *testing.T) {
 	configured.client = legacy.client
 	_, err = configured.Load(true)
 	require.NoError(t, err)
-	var highID uint64
-	require.Zero(t, configured.NewSlice(ctx, &highID))
-	require.Equal(t, uint64(1)<<63|1, highID)
+	require.Zero(t, configured.NewSlice(ctx, &id))
+	require.Equal(t, uint64(counter), id, "configured v1 must reserve from the private counter")
 	after, err := configured.getCounter("nextChunk")
 	require.NoError(t, err)
-	require.Equal(t, counter, after, "configured legacy writer changed private counter")
+	require.Equal(t, counter+sliceIdBatch, after)
+	next, err := allocator.Reserve(ctx, GlobalSliceAllocatorID, 0)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), next, "configured v1 must not reserve global IDs")
 	stored, err := configured.doLoad()
 	require.NoError(t, err)
 	require.Equal(t, body, stored, "configured legacy mount changed format")
 	require.Equal(t, legacy.flockKey(42), configured.flockKey(42))
 	require.Zero(t, legacy.Flock(ctx, 42, 1, syscall.F_WRLCK, false))
 	require.Equal(t, syscall.EAGAIN, configured.Flock(ctx, 42, 2, syscall.F_WRLCK, false))
-	require.Zero(t, legacy.NewSlice(ctx, &legacyID))
-	require.Equal(t, uint64(2), legacyID, "old writer's cached allocation must remain valid")
+	require.Zero(t, legacy.NewSlice(ctx, &id))
+	require.Equal(t, uint64(2), id, "old writer's cached allocation must remain valid")
 }
 
-func TestGlobalAllocationAcrossLegacyAndCloneRestarts(t *testing.T) {
+func TestLegacyAllocationIgnoresUnavailableAllocator(t *testing.T) {
+	// An unusable client proves that even attempting external allocation would
+	// fail: version 1 must not inspect this configured runtime dependency.
+	m := cloneTestMeta(t, &SliceAllocator{}, "source")
+	require.NoError(t, m.Init(&Format{Name: "legacy", MetaVersion: 1}, false))
+	var id uint64
+	require.Zero(t, m.NewSlice(Background(), &id))
+	require.Equal(t, uint64(1), id)
+	next, err := m.AdvanceNextChunk(0)
+	require.NoError(t, err)
+	require.Equal(t, int64(1+sliceIdBatch), next)
+	next, err = m.AdvanceNextChunk(17)
+	require.NoError(t, err)
+	require.Equal(t, int64(18+sliceIdBatch), next)
+}
+
+func TestGlobalAllocationAcrossCloneRestarts(t *testing.T) {
 	ctx := Background()
 	allocator := &SliceAllocator{store: cloneTestMeta(t, nil, "control")}
 	require.NoError(t, allocator.Initialize(ctx, GlobalSliceAllocatorID, 1))
 	seen := make(map[uint64]bool)
-	for _, version := range []int{1, 3, 3} {
+	for range 3 {
 		m := cloneTestMeta(t, allocator, "target")
-		format := &Format{Name: "member", MetaVersion: version}
-		if version == 3 {
-			format.SliceAllocator = GlobalSliceAllocatorID
-		}
+		format := &Format{Name: "member", MetaVersion: 3, SliceAllocator: GlobalSliceAllocatorID}
 		require.NoError(t, m.Init(format, false))
 		for range 8193 {
 			var id uint64
@@ -156,12 +171,13 @@ func TestGlobalAllocatorFailsClosed(t *testing.T) {
 	legacy := cloneTestMeta(t, allocator, "target")
 	require.NoError(t, legacy.Init(&Format{Name: "legacy", MetaVersion: 1}, false))
 	var id uint64
-	require.Equal(t, syscall.EIO, legacy.NewSlice(ctx, &id), "configured v1 must not use private counter")
+	require.Zero(t, legacy.NewSlice(ctx, &id), "v1 must ignore the missing global record")
+	require.Equal(t, uint64(1), id)
 	require.Error(t, legacy.PrepareCloneFormat(ctx), "preparation must not initialize control")
 	require.Equal(t, 1, legacy.getFormat().MetaVersion)
 	counter, err := legacy.getCounter("nextChunk")
 	require.NoError(t, err)
-	require.Equal(t, int64(1), counter)
+	require.Equal(t, int64(1+sliceIdBatch), counter)
 	require.NoError(t, allocator.Initialize(ctx, GlobalSliceAllocatorID, 1))
 	legacy.lockNamespace = ""
 	require.Error(t, legacy.PrepareCloneFormat(ctx))
@@ -209,7 +225,7 @@ func TestGlobalAllocatorAmbiguousCommitAndBounds(t *testing.T) {
 
 	require.NoError(t, allocator.Initialize(ctx, GlobalSliceAllocatorID, math.MaxInt64-4096))
 	m := cloneTestMeta(t, allocator, "target")
-	require.NoError(t, m.Init(&Format{Name: "legacy", MetaVersion: 1}, false))
+	require.NoError(t, m.Init(&Format{Name: "clone", MetaVersion: 3, SliceAllocator: GlobalSliceAllocatorID}, false))
 	var id uint64
 	for range 4096 {
 		require.Zero(t, m.NewSlice(ctx, &id))

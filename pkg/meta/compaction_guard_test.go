@@ -19,7 +19,6 @@ package meta
 import (
 	"context"
 	"errors"
-	"fmt"
 	"syscall"
 	"testing"
 	"time"
@@ -32,7 +31,7 @@ func newCompactionGuardMeta(t *testing.T, guard func(Context) (func(), error)) (
 	allocator, err := OpenSliceAllocator("memkv://compaction-allocator")
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, allocator.Close()) })
-	family := fmt.Sprintf("%064x", 789)
+	family := GlobalSliceAllocatorID
 	require.NoError(t, allocator.Initialize(Background(), family, 100))
 	conf := DefaultConf()
 	conf.NoBGJob, conf.MaxDeletes = true, 0
@@ -40,7 +39,7 @@ func newCompactionGuardMeta(t *testing.T, guard func(Context) (func(), error)) (
 	client, err := newKVMeta("memkv", t.Name(), conf)
 	require.NoError(t, err)
 	m := client.(*kvMeta)
-	require.NoError(t, m.Init(&Format{Name: "compaction", MetaVersion: 2, SliceAllocator: family}, true))
+	require.NoError(t, m.Init(&Format{Name: "compaction", MetaVersion: 3, SliceAllocator: family}, true))
 	_, err = m.Load(true)
 	require.NoError(t, err)
 	require.NoError(t, m.NewSession(false))
@@ -262,6 +261,7 @@ func (c *blockedCompactionRead) simpleTxn(ctx context.Context, f func(*kvTxn) er
 func TestCloseSessionCancelsCompactionMetadataRead(t *testing.T) {
 	conf := DefaultConf()
 	conf.NoBGJob, conf.MaxDeletes = true, 0
+	conf.CompactionGuard = func(Context) (func(), error) { return func() {}, nil }
 	client, err := newKVMeta("memkv", t.Name(), conf)
 	if err != nil {
 		t.Fatal(err)
@@ -298,5 +298,29 @@ func TestCloseSessionCancelsCompactionMetadataRead(t *testing.T) {
 			t.Error(err)
 		}
 	}
+	<-compacted
+}
+
+func TestLegacyCloseSessionDoesNotCancelOrJoinCompaction(t *testing.T) {
+	m := cloneTestMeta(t, nil, "legacy")
+	require.NoError(t, m.Init(&Format{Name: "legacy", MetaVersion: 1}, false))
+	blocked := &blockedCompactionRead{tkvClient: m.client, entered: make(chan context.Context, 1), release: make(chan struct{})}
+	m.client = blocked
+	compacted := make(chan struct{})
+	go func() { m.compactChunk(RootInode, 0, false, false, 0); close(compacted) }()
+	ctx := <-blocked.entered
+	closed := make(chan error, 1)
+	go func() { closed <- m.CloseSession() }()
+	select {
+	case err := <-closed:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		close(blocked.release)
+		<-compacted
+		<-closed
+		t.Fatal("legacy close joined a background compaction")
+	}
+	require.NoError(t, ctx.Err(), "legacy background compaction must not be canceled")
+	close(blocked.release)
 	<-compacted
 }

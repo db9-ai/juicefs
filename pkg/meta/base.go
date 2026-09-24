@@ -991,17 +991,25 @@ func (m *baseMeta) CloseSession() error {
 	m.sesMu.Lock()
 	m.umounting = true
 	m.sesMu.Unlock()
-	m.Lock()
-	if m.sessCtx == nil {
-		m.sessCtx = Background()
+	// Only guarded clients change the legacy cleanup ordering: their physical
+	// compactions must finish before session locks can be released.
+	if m.conf.CompactionGuard != nil {
+		m.Lock()
+		if m.sessCtx == nil {
+			m.sessCtx = Background()
+		}
+		m.sessCtx.Cancel()
+		m.Unlock()
+		m.sessWG.Wait()
 	}
-	m.sessCtx.Cancel()
-	m.Unlock()
-	m.sessWG.Wait()
 	var err error
 	if m.sid > 0 {
 		err = m.en.doCleanStaleSession(m.sid)
 	}
+	if m.sessCtx != nil {
+		m.sessCtx.Cancel()
+	}
+	m.sessWG.Wait()
 	m.stopDeleteSliceTasks()
 	m.shutdownBase()
 	logger.Infof("close session %d: %v", m.sid, err)
@@ -2159,7 +2167,7 @@ func (m *baseMeta) NewSlice(ctx Context, id *uint64) syscall.Errno {
 				return syscall.EIO
 			}
 		}
-		if f.MetaVersion == 2 || f.MetaVersion == 3 || m.conf.SliceAllocator != nil {
+		if f.MetaVersion == 2 || f.MetaVersion == 3 {
 			if m.conf.SliceAllocator == nil {
 				return syscall.EIO
 			}
@@ -2172,7 +2180,7 @@ func (m *baseMeta) NewSlice(ctx Context, id *uint64) syscall.Errno {
 				logger.Errorf("reserve shared slices: %s", err)
 				return syscall.EIO
 			}
-			if f.MetaVersion != 2 {
+			if f.MetaVersion == 3 {
 				// Keep the control sequence signed-positive, but place new clone
 				// objects outside the non-overflowed legacy counter domain.
 				start |= uint64(1) << 63
@@ -2831,21 +2839,23 @@ func (m *baseMeta) compactChunk(inode Ino, indx uint32, once, force bool, tierID
 		m.Unlock()
 		return
 	}
-	if m.sessCtx != nil && m.sessCtx.Canceled() {
-		m.Unlock()
-		return
+	ctx := Background()
+	if m.conf.CompactionGuard != nil {
+		if m.sessCtx != nil && m.sessCtx.Canceled() {
+			m.Unlock()
+			return
+		}
+		// Register under the same lock used by CloseSession to stop admission.
+		if m.sessCtx == nil {
+			m.sessCtx = Background()
+		}
+		ctx = m.sessCtx
+		m.sessWG.Add(1)
+		defer m.sessWG.Done()
 	}
-	// Register under the same lock used by CloseSession to stop admission.
-	// Read-triggered compactions otherwise outlive the metadata client.
-	if m.sessCtx == nil {
-		m.sessCtx = Background()
-	}
-	ctx := m.sessCtx
-	m.sessWG.Add(1)
 	m.compacting[k] = true
 	m.Unlock()
 	defer func() {
-		defer m.sessWG.Done()
 		m.Lock()
 		delete(m.compacting, k)
 		m.Unlock()

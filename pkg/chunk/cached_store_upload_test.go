@@ -57,6 +57,7 @@ func TestSliceFinishDrainsUploadsAfterError(t *testing.T) {
 		return mem.Put(ctx, key, in, getters...)
 	}
 	conf := defaultConf
+	conf.JoinUploads = true
 	conf.CacheDir, conf.MaxUpload = "memory", 2
 	store := NewCachedStore(blob, conf, nil).(*cachedStore)
 	store.conf.MaxRetries = 0 // Exercise the terminal error without retry delays.
@@ -85,6 +86,7 @@ func TestSliceAbortWaitsForStartedUpload(t *testing.T) {
 	require.NoError(t, err)
 	blob := &blockingPutStorage{ObjectStorage: mem, entered: make(chan struct{}), release: make(chan struct{})}
 	conf := defaultConf
+	conf.JoinUploads = true
 	conf.CacheDir = "memory"
 	store := NewCachedStore(blob, conf, nil).(*cachedStore)
 	defer store.Close()
@@ -120,6 +122,7 @@ func TestCachedStorePutTimeoutDoesNotDetachUpload(t *testing.T) {
 		return mem.Put(context.Background(), key, in, getters...)
 	}
 	conf := defaultConf
+	conf.JoinUploads = true
 	conf.CacheDir, conf.PutTimeout = "memory", 10*time.Millisecond
 	store := NewCachedStore(blob, conf, nil).(*cachedStore)
 	defer store.Close()
@@ -155,6 +158,7 @@ func TestSliceConcurrentFinishAbortJoinsUpload(t *testing.T) {
 		return mem.Put(context.Background(), key, r, attrs...)
 	}
 	conf := defaultConf
+	conf.JoinUploads = true
 	conf.CacheDir = "memory"
 	store := NewCachedStore(blob, conf, nil).(*cachedStore)
 	defer store.Close()
@@ -205,6 +209,7 @@ func TestSliceAbortCancelsQueuedUploadWhileFinishWaits(t *testing.T) {
 		return mem.Put(context.Background(), key, in, attrs...)
 	}
 	conf := defaultConf
+	conf.JoinUploads = true
 	conf.CacheDir, conf.MaxUpload = "memory", 1
 	store := NewCachedStore(blob, conf, nil).(*cachedStore)
 	defer store.Close()
@@ -235,4 +240,110 @@ func TestSliceAbortCancelsQueuedUploadWhileFinishWaits(t *testing.T) {
 		t.Fatal("Abort did not finish after the active upload completed")
 	}
 	require.EqualValues(t, 1, calls.Load(), "the queued upload must not start a second PUT")
+}
+
+func TestLegacyPutTimeoutReturnsBeforePhysicalUpload(t *testing.T) {
+	mem, err := object.CreateStorage("mem", "", "", "", "")
+	require.NoError(t, err)
+	expired, release, returned := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	blob := &controlledPutStorage{ObjectStorage: mem}
+	blob.put = func(ctx context.Context, key string, in io.Reader, getters ...object.AttrGetter) error {
+		<-ctx.Done()
+		close(expired)
+		<-release
+		defer close(returned)
+		return mem.Put(context.Background(), key, in, getters...)
+	}
+	conf := defaultConf
+	conf.CacheDir, conf.PutTimeout = "memory", 10*time.Millisecond
+	store := NewCachedStore(blob, conf, nil).(*cachedStore)
+	defer store.Close()
+	defer releaseOnce.Do(func() { close(release) })
+	page := NewPage([]byte("data"))
+	defer page.Release()
+	done := make(chan error, 1)
+	go func() { done <- store.put(context.Background(), "chunks/legacy", page) }()
+	<-expired
+	select {
+	case err := <-done:
+		require.ErrorContains(t, err, "timeout")
+	case <-time.After(time.Second):
+		t.Fatal("legacy timeout waited for physical upload")
+	}
+	releaseOnce.Do(func() { close(release) })
+	<-returned
+}
+
+func TestLegacyFinishReturnsFirstUploadError(t *testing.T) {
+	mem, err := object.CreateStorage("mem", "", "", "", "")
+	require.NoError(t, err)
+	entered, release, returned := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	blob := &controlledPutStorage{ObjectStorage: mem}
+	blob.put = func(ctx context.Context, key string, in io.Reader, getters ...object.AttrGetter) error {
+		if strings.Contains(key, "_0_") {
+			<-entered
+			return errors.New("first block failed")
+		}
+		close(entered)
+		<-release
+		defer close(returned)
+		return mem.Put(ctx, key, in, getters...)
+	}
+	conf := defaultConf
+	conf.CacheDir, conf.MaxUpload = "memory", 2
+	store := NewCachedStore(blob, conf, nil).(*cachedStore)
+	store.conf.MaxRetries = 0
+	defer store.Close()
+	defer releaseOnce.Do(func() { close(release) })
+	writer := store.NewWriter(51, 0).(*wSlice)
+	_, err = writer.WriteAt(make([]byte, 2*conf.BlockSize), 0)
+	require.NoError(t, err)
+	done := make(chan error, 1)
+	go func() { done <- writer.Finish(2 * conf.BlockSize) }()
+	<-entered
+	select {
+	case err := <-done:
+		require.ErrorContains(t, err, "first block failed")
+	case <-time.After(time.Second):
+		t.Fatal("legacy Finish waited for remaining upload after first error")
+	}
+	releaseOnce.Do(func() { close(release) })
+	<-returned
+	require.NoError(t, <-writer.errors)
+	writer.Abort()
+}
+
+func TestLegacyAbortDoesNotJoinStartedUpload(t *testing.T) {
+	mem, err := object.CreateStorage("mem", "", "", "", "")
+	require.NoError(t, err)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	blob := &controlledPutStorage{ObjectStorage: mem}
+	blob.put = func(ctx context.Context, key string, in io.Reader, getters ...object.AttrGetter) error {
+		close(entered)
+		<-release
+		return mem.Put(ctx, key, in, getters...)
+	}
+	conf := defaultConf
+	conf.CacheDir = "memory"
+	store := NewCachedStore(blob, conf, nil).(*cachedStore)
+	defer store.Close()
+	defer releaseOnce.Do(func() { close(release) })
+	writer := store.NewWriter(52, 0).(*wSlice)
+	_, err = writer.WriteAt(make([]byte, conf.BlockSize), 0)
+	require.NoError(t, err)
+	require.NoError(t, writer.FlushTo(conf.BlockSize))
+	<-entered
+	done := make(chan struct{})
+	go func() { writer.Abort(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("legacy Abort waited for physical upload")
+	}
+	require.False(t, writer.uploadFailed.Load(), "legacy Abort must not cancel queued uploads")
+	releaseOnce.Do(func() { close(release) })
+	require.NoError(t, <-writer.errors)
 }

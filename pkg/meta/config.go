@@ -43,8 +43,7 @@ type Config struct {
 	// after the client starts; nil preserves the default compaction behavior.
 	CompactionGuard func(Context) (release func(), err error) `json:"-"`
 	// SliceAllocator supplies external ID sequences for metadata v2/v3.
-	// On legacy formats, explicit configuration opts new allocations into the
-	// global high-bit domain without changing the stored format or private counter.
+	// Version 1 always uses its private counter and ignores this dependency.
 	// It is a runtime dependency and is never copied in tenant snapshots.
 	SliceAllocator     *SliceAllocator
 	Retries            int

@@ -318,24 +318,32 @@ func (store *cachedStore) put(ctx context.Context, key string, p *Page) error {
 	if store.upLimit != nil {
 		store.upLimit.Wait(int64(len(p.Data)))
 	}
-	// Do not detach the physical PUT on timeout: callers use upload completion
-	// as the boundary after which an aborted/retired slice cannot create objects.
+	p.Acquire()
+	put := func(ctx context.Context) error {
+		defer p.Release()
+		var (
+			reqID string
+			sc    = object.DefaultStorageClass
+		)
+		st := time.Now()
+		err := store.storage.Put(ctx, key, bytes.NewReader(p.Data), object.WithRequestID(&reqID), object.WithStorageClass(&sc))
+		used := time.Since(st)
+		logRequest("PUT", key, "", reqID, err, used)
+		store.objectDataBytes.WithLabelValues("PUT", sc).Add(float64(len(p.Data)))
+		store.objectReqsHistogram.WithLabelValues("PUT", sc).Observe(used.Seconds())
+		if err != nil {
+			store.objectReqErrors.Add(1)
+		}
+		return err
+	}
+	if !store.conf.JoinUploads {
+		return utils.WithTimeout(ctx, put, store.conf.PutTimeout)
+	}
+	// Guarded retirement must observe physical completion even if a provider
+	// ignores cancellation. The timeout still reaches providers that honor it.
 	ctx, cancel := context.WithTimeout(ctx, store.conf.PutTimeout)
 	defer cancel()
-	var (
-		reqID string
-		sc    = object.DefaultStorageClass
-	)
-	st := time.Now()
-	err := store.storage.Put(ctx, key, bytes.NewReader(p.Data), object.WithRequestID(&reqID), object.WithStorageClass(&sc))
-	used := time.Since(st)
-	logRequest("PUT", key, "", reqID, err, used)
-	store.objectDataBytes.WithLabelValues("PUT", sc).Add(float64(len(p.Data)))
-	store.objectReqsHistogram.WithLabelValues("PUT", sc).Observe(used.Seconds())
-	if err != nil {
-		store.objectReqErrors.Add(1)
-	}
-	return err
+	return put(ctx)
 }
 
 func (store *cachedStore) delete(key string) error {
@@ -520,8 +528,10 @@ func (s *wSlice) FlushTo(offset int) error {
 }
 
 func (s *wSlice) Finish(length int) error {
-	s.finishMu.Lock()
-	defer s.finishMu.Unlock()
+	if s.store.conf.JoinUploads {
+		s.finishMu.Lock()
+		defer s.finishMu.Unlock()
+	}
 	if s.length != length {
 		return fmt.Errorf("Length mismatch: %v != %v", s.length, length)
 	}
@@ -530,7 +540,17 @@ func (s *wSlice) Finish(length int) error {
 	if err := s.FlushTo(n * s.store.conf.BlockSize); err != nil {
 		return err
 	}
-	return s.waitUploads()
+	if s.store.conf.JoinUploads {
+		return s.waitUploads()
+	}
+	for i := 0; i < s.pendings; i++ {
+		if err := <-s.errors; err != nil {
+			s.uploadError = err
+			s.uploadFailed.Store(true)
+			return err
+		}
+	}
+	return nil
 }
 
 // Drain even after the first error. In non-writeback mode every result is
@@ -548,12 +568,13 @@ func (s *wSlice) waitUploads() error {
 }
 
 func (s *wSlice) Abort() {
-	// Signal cancellation before waiting for Finish, so queued uploads and
-	// retries can stop while the active physical PUT is still being joined.
-	s.uploadFailed.Store(true)
-	s.finishMu.Lock()
-	defer s.finishMu.Unlock()
-	_ = s.waitUploads()
+	if s.store.conf.JoinUploads {
+		// Cancel queued retries before joining a concurrent Finish.
+		s.uploadFailed.Store(true)
+		s.finishMu.Lock()
+		defer s.finishMu.Unlock()
+		_ = s.waitUploads()
+	}
 	for i := range s.pages {
 		for _, b := range s.pages[i] {
 			freePage(b)
@@ -567,6 +588,10 @@ func (s *wSlice) Abort() {
 
 // Config contains options for cachedStore
 type Config struct {
+	// JoinUploads makes PUT timeouts, Finish errors and Abort wait for started
+	// physical uploads. Enable for v3 clone retirement; false preserves legacy
+	// timeout and early-return behavior. Retirement also requires Writeback=false.
+	JoinUploads            bool
 	CacheDir               string
 	CacheMode              os.FileMode
 	CacheSize              uint64

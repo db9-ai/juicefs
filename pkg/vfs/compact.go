@@ -57,7 +57,8 @@ func Compact(conf chunk.Config, store chunk.ChunkStore, slices []meta.Slice, id 
 }
 
 // CompactContext permits cancellation of memory admission and source reads.
-// Cancellation still joins uploads already started before returning.
+// To join started uploads before returning, configure the cached store with
+// JoinUploads. Compaction always disables writeback for its output writer.
 func CompactContext(ctx context.Context, conf chunk.Config, store chunk.ChunkStore, slices []meta.Slice, id uint64, tierID uint8) error {
 	for utils.AllocMemory()-store.UsedMemory() > int64(conf.BufferSize)*3/2 {
 		select {

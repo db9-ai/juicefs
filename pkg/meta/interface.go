@@ -43,7 +43,7 @@ const (
 	DeleteSlice = 1000
 	// CompactChunk requests object-store compaction with ([]Slice, uint64 ID,
 	// uint8 tier, Context). The trailing context cancels pre-upload work;
-	// callbacks must join started uploads before returning.
+	// guarded callbacks must join started uploads before returning.
 	CompactChunk = 1001
 	// Rmr is a message to remove a directory recursively.
 	Rmr = 1002

@@ -10,17 +10,15 @@ metadata migration.
 
 | Stored metadata version | New slice allocation | Lock layout |
 | --- | --- | --- |
-| 1, no runtime allocator | Existing private `nextChunk` counter | Existing unscoped keys |
-| 1, runtime allocator configured | Global ordinal with bit 63 set | Existing unscoped keys |
+| 1, with or without a runtime allocator | Existing private `nextChunk` counter | Existing unscoped keys |
 | 2 | Existing per-family external sequence | Existing physical-keyspace scope |
 | 3 | Global ordinal with bit 63 set | Same physical-keyspace scope as version 2 |
 
-Configuring `Config.SliceAllocator` on a legacy volume changes only new
-allocations. It does not rewrite the stored format, advance its private counter,
-change its lock layout, or invalidate ranges cached by older writers. Legacy
-writers can continue allocating low IDs while updated writers allocate high IDs.
-This separation assumes that historical signed legacy counters have never
-overflowed into the high-bit domain.
+Version 1 ignores `Config.SliceAllocator`, including an unavailable allocator.
+Its format, allocation ranges, private counter and lock layout retain their
+existing contract. Version 2 keeps its per-family sequence. Only a stored version
+3 format enables global high-bit allocation. This separation assumes historical
+signed legacy counters have never overflowed into the high-bit domain.
 
 The deployment provisions `GlobalSliceAllocatorID` exactly once, initially at
 ordinal 1, in a control keyspace excluded from all tenant snapshots and restores.
@@ -68,3 +66,27 @@ TiKV binary slice records and JSON dump/load preserve the full unsigned ID.
 High-bit IDs do not advance the signed private counter when loading a JSON dump.
 This FS9 compatibility contract covers TiKV metadata; it does not establish
 high-bit support for SQL schemas or unrelated metadata drivers.
+
+## Runtime upload and compaction boundaries
+
+Legacy clients keep the existing PUT timeout, first-error Finish and immediate
+Abort behavior. `chunk.Config.JoinUploads` is an explicit version 3 integration
+option: it joins started physical PUTs even when providers ignore cancellation,
+drains remaining upload results after an error, and serializes Finish with Abort.
+Its use for retirement requires `Writeback=false`; staged background uploads do
+not establish that physical completion boundary. Compaction already disables
+writeback in the baseline implementation and continues to do so.
+
+Only clients configured with `meta.Config.CompactionGuard` admit compactions
+through a retirement guard, cancel them on close, and join them before releasing
+session locks. FS9 configures this hook only for version 3. Legacy clients retain
+background compaction contexts and the original session cleanup ordering.
+`CompactContext` is explicitly cancellable; the existing `Compact` entry point
+continues to use a background context.
+
+TiKV reads and timestamp acquisition now honor their supplied context. This
+corrects cancellation propagation without changing keys, counters or backend
+dependencies, but canceled ordinary reads may return earlier than older builds.
+The upload and compaction guarantees above concern orderly process shutdown.
+They do not establish crash-safe GC: durable sid=0 lock ownership and recovery
+remain an unresolved blocker.

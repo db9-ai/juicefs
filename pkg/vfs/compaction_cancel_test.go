@@ -14,6 +14,7 @@ import (
 func TestCloseSessionCancelsMemoryThrottledCompaction(t *testing.T) {
 	conf := meta.DefaultConf()
 	conf.NoBGJob, conf.MaxDeletes = true, 0
+	conf.CompactionGuard = func(meta.Context) (func(), error) { return func() {}, nil }
 	m, err := meta.NewClientWithError("memkv://compaction-cancel", conf)
 	if err != nil {
 		t.Fatal(err)
