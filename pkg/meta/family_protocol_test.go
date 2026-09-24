@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestFamilyV4AllocationAcrossCloneRestarts(t *testing.T) {
+func TestFamilyV2AllocationAcrossCloneRestarts(t *testing.T) {
 	ctx := Background()
 	allocator := &SliceAllocator{store: cloneTestMeta(t, nil, "control")}
 	family := fmt.Sprintf("%064x", 4)
@@ -18,7 +18,7 @@ func TestFamilyV4AllocationAcrossCloneRestarts(t *testing.T) {
 	seen := make(map[uint64]bool)
 	for range 3 {
 		m := cloneTestMeta(t, allocator, "member")
-		require.NoError(t, m.Init(&Format{Name: "family", MetaVersion: 4, SliceAllocator: family}, false))
+		require.NoError(t, m.Init(&Format{Name: "family", MetaVersion: 2, SliceAllocator: family}, false))
 		for range 8193 {
 			var id uint64
 			require.Zero(t, m.NewSlice(ctx, &id))
@@ -29,9 +29,9 @@ func TestFamilyV4AllocationAcrossCloneRestarts(t *testing.T) {
 		}
 		counter, err := m.getCounter("nextChunk")
 		require.NoError(t, err)
-		require.Equal(t, int64(1), counter, "v4 must not advance its cloned private counter")
+		require.Equal(t, int64(1), counter, "v2 must not advance its cloned private counter")
 		_, err = m.AdvanceNextChunk(1 << 40)
-		require.Error(t, err, "fixed offsets are invalid for v4")
+		require.Error(t, err, "fixed offsets are invalid for v2")
 	}
 	next, err := allocator.Reserve(ctx, family, 0)
 	require.NoError(t, err)
@@ -41,7 +41,7 @@ func TestFamilyV4AllocationAcrossCloneRestarts(t *testing.T) {
 	otherFamily := fmt.Sprintf("%064x", 5)
 	require.NoError(t, allocator.Initialize(ctx, otherFamily, 1))
 	other := cloneTestMeta(t, allocator, "other")
-	require.NoError(t, other.Init(&Format{Name: "other", MetaVersion: 4, SliceAllocator: otherFamily}, false))
+	require.NoError(t, other.Init(&Format{Name: "other", MetaVersion: 2, SliceAllocator: otherFamily}, false))
 	var id uint64
 	require.Zero(t, other.NewSlice(ctx, &id))
 	require.Equal(t, uint64(1), id)
@@ -50,16 +50,16 @@ func TestFamilyV4AllocationAcrossCloneRestarts(t *testing.T) {
 	require.Equal(t, uint64(1+9*4096), next)
 }
 
-func TestFamilyV4FormatAndAllocatorFailures(t *testing.T) {
+func TestFamilyV2FormatAndAllocatorFailures(t *testing.T) {
 	ctx := Background()
 	family := fmt.Sprintf("%064x", 4)
-	require.Error(t, (&Format{MetaVersion: 4}).CheckVersion())
-	require.Error(t, (&Format{MetaVersion: 4, SliceAllocator: "invalid"}).CheckVersion())
-	require.NoError(t, (&Format{MetaVersion: 4, SliceAllocator: family}).CheckVersion())
-	require.Error(t, (&Format{MetaVersion: 5}).CheckVersion())
+	require.Error(t, (&Format{MetaVersion: 2}).CheckVersion())
+	require.Error(t, (&Format{MetaVersion: 2, SliceAllocator: "invalid"}).CheckVersion())
+	require.NoError(t, (&Format{MetaVersion: 2, SliceAllocator: family}).CheckVersion())
+	require.Error(t, (&Format{MetaVersion: 3}).CheckVersion())
 
 	m := cloneTestMeta(t, nil, "target")
-	require.NoError(t, m.Init(&Format{Name: "family", MetaVersion: 4, SliceAllocator: family}, false))
+	require.NoError(t, m.Init(&Format{Name: "family", MetaVersion: 2, SliceAllocator: family}, false))
 	var id uint64
 	require.Equal(t, syscall.EIO, m.NewSlice(ctx, &id))
 	_, err := m.AdvanceNextChunk(0)
@@ -72,17 +72,17 @@ func TestFamilyV4FormatAndAllocatorFailures(t *testing.T) {
 		require.Zero(t, m.NewSlice(ctx, &id))
 	}
 	require.Equal(t, uint64(math.MaxInt64-1), id)
-	require.Equal(t, syscall.EIO, m.NewSlice(ctx, &id), "v4 must not overflow into the v3 domain")
+	require.Equal(t, syscall.EIO, m.NewSlice(ctx, &id), "family allocation must not exceed the signed-positive range")
 }
 
-func TestFamilyV4RestoredMetadataAndAuthorityCAS(t *testing.T) {
+func TestFamilyV2RestoredMetadataAndAuthorityCAS(t *testing.T) {
 	ctx := Background()
 	family := fmt.Sprintf("%064x", 4)
 	allocator := &SliceAllocator{store: cloneTestMeta(t, nil, "control")}
 	require.NoError(t, allocator.Initialize(ctx, family, 1))
 	source := cloneTestMeta(t, allocator, "source")
-	require.NoError(t, source.Init(&Format{Name: "family", UUID: "original", MetaVersion: 4, SliceAllocator: family}, false))
-	body := []byte(fmt.Sprintf(`{"Name":"family","UUID":"original","MetaVersion":4,"SliceAllocator":%q,"FutureSetting":{"keep":true}}`, family))
+	require.NoError(t, source.Init(&Format{Name: "family", UUID: "original", MetaVersion: 2, SliceAllocator: family}, false))
+	body := []byte(fmt.Sprintf(`{"Name":"family","UUID":"original","MetaVersion":2,"SliceAllocator":%q,"FutureSetting":{"keep":true}}`, family))
 	require.NoError(t, source.setValue([]byte("setting"), body))
 	require.NoError(t, source.setValue(source.sliceKey(123, 4096), packCounter(2)))
 	require.Zero(t, source.SetXattr(ctx, RootInode, "authority", []byte("source"), XattrCreate))
@@ -100,7 +100,7 @@ func TestFamilyV4RestoredMetadataAndAuthorityCAS(t *testing.T) {
 	// record. No preparation API, format write, session or target flock is needed.
 	format, err := target.Load(true)
 	require.NoError(t, err)
-	require.Equal(t, 4, format.MetaVersion)
+	require.Equal(t, 2, format.MetaVersion)
 	require.Equal(t, family, format.SliceAllocator)
 	next, err := allocator.Reserve(ctx, format.SliceAllocator, 0)
 	require.NoError(t, err)
@@ -130,13 +130,6 @@ func TestFamilyV4RestoredMetadataAndAuthorityCAS(t *testing.T) {
 	require.Equal(t, syscall.EAGAIN, replica.Flock(ctx, RootInode, 30, syscall.F_WRLCK, false))
 	require.Equal(t, syscall.EAGAIN, replica.Setlk(ctx, 42, 31, false, syscall.F_WRLCK, 0, 99, 1))
 	require.Equal(t, syscall.EAGAIN, source.Flock(ctx, RootInode, 40, syscall.F_WRLCK, false))
-
-	// The historical migration must never reinterpret a v4 family as v3.
-	require.NoError(t, allocator.Initialize(ctx, GlobalSliceAllocatorID, 1))
-	require.Error(t, target.PrepareCloneFormat(ctx))
-	stored, err := target.doLoad()
-	require.NoError(t, err)
-	require.Equal(t, body, stored)
 }
 
 func TestCompareAndSwapXattrExactBytes(t *testing.T) {

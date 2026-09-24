@@ -19,6 +19,7 @@ package meta
 import (
 	"context"
 	"errors"
+	"fmt"
 	"syscall"
 	"testing"
 	"time"
@@ -31,7 +32,7 @@ func newCompactionGuardMeta(t *testing.T, guard func(Context) (func(), error)) (
 	allocator, err := OpenSliceAllocator("memkv://compaction-allocator")
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, allocator.Close()) })
-	family := GlobalSliceAllocatorID
+	family := fmt.Sprintf("%064x", 3)
 	require.NoError(t, allocator.Initialize(Background(), family, 100))
 	conf := DefaultConf()
 	conf.NoBGJob, conf.MaxDeletes = true, 0
@@ -39,7 +40,7 @@ func newCompactionGuardMeta(t *testing.T, guard func(Context) (func(), error)) (
 	client, err := newKVMeta("memkv", t.Name(), conf)
 	require.NoError(t, err)
 	m := client.(*kvMeta)
-	require.NoError(t, m.Init(&Format{Name: "compaction", MetaVersion: 3, SliceAllocator: family}, true))
+	require.NoError(t, m.Init(&Format{Name: "compaction", MetaVersion: 2, SliceAllocator: family}, true))
 	_, err = m.Load(true)
 	require.NoError(t, err)
 	require.NoError(t, m.NewSession(false))

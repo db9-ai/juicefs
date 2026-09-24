@@ -9,11 +9,6 @@ import (
 	"strings"
 )
 
-// GlobalSliceAllocatorID names the deployment-wide sequence for high-bit slice
-// IDs. Provision it once outside tenant snapshots; never recreate a missing
-// sequence during mount or clone preparation.
-const GlobalSliceAllocatorID = "a622e127cd50007f6c0a460b9ecc934b986d3ef2c916a2ee1704959bd67830a3"
-
 // SliceAllocator reserves never-reused IDs outside cloneable volume metadata.
 // Its keyspace must be excluded from tenant snapshot/restore operations. The
 // caller owns Close; it may share one allocator among multiple metadata clients.

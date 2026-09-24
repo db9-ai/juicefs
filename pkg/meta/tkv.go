@@ -243,14 +243,14 @@ func (m *kvMeta) xattrKey(inode Ino, name string) []byte {
 	return m.fmtKey("A", inode, "X", name)
 }
 
-// lockPrefix binds v2/v3/v4 coordination to the actual metadata backend identity,
+// lockPrefix binds v2 coordination to the actual metadata backend identity,
 // not the cloned format UUID. Raw snapshots retain source lock rows, but those
 // rows cannot admit or block operations in a different physical keyspace.
-// Version 1 retains its existing wire layout. Version 4 is selected only for
+// Version 1 retains its existing wire layout. Version 2 is selected only for
 // new physical families; existing volumes never change their lock keys.
 func (m *kvMeta) lockPrefix(kind string) []byte {
 	format := m.getFormat()
-	if m.lockNamespace != "" && (format.MetaVersion == 2 || format.MetaVersion == 3 || format.MetaVersion == 4) {
+	if m.lockNamespace != "" && (format.MetaVersion == 2) {
 		return m.fmtKey(kind, "2/", m.lockNamespace, "/")
 	}
 	return m.fmtKey(kind)
@@ -478,55 +478,6 @@ func (m *kvMeta) scan(startKey, endKey []byte, limit int, filter func(k, v []byt
 		return nil
 	}, 0)
 	return keys, vals, err
-}
-
-func (m *kvMeta) PrepareCloneFormat(ctx Context) error {
-	if m.lockNamespace == "" {
-		return fmt.Errorf("clone preparation requires physical metadata lock identity")
-	}
-	if m.conf.SliceAllocator == nil {
-		return fmt.Errorf("global slice allocator unavailable")
-	}
-	if _, err := m.conf.SliceAllocator.Reserve(ctx, GlobalSliceAllocatorID, 0); err != nil {
-		return err
-	}
-	err := m.txn(ctx, func(tx *kvTxn) error {
-		body := tx.get(m.fmtKey("setting"))
-		var format Format
-		if err := json.Unmarshal(body, &format); err != nil {
-			return fmt.Errorf("load restored clone format: %w", err)
-		}
-		if err := format.CheckVersion(); err != nil {
-			return err
-		}
-		if format.MetaVersion >= 4 {
-			return fmt.Errorf("metadata version %d cannot use legacy clone migration", format.MetaVersion)
-		}
-		if format.MetaVersion == 3 {
-			return nil
-		}
-		// Preserve every other field, including settings unknown to this build.
-		// This deliberately avoids Init(force), which also edits other metadata.
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(body, &fields); err != nil {
-			return err
-		}
-		fields["MetaVersion"] = json.RawMessage("3")
-		fields["SliceAllocator"], _ = json.Marshal(GlobalSliceAllocatorID)
-		updated, err := json.Marshal(fields)
-		if err != nil {
-			return err
-		}
-		tx.set(m.fmtKey("setting"), updated)
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	// The caller may acquire the first target fence through this same client.
-	// Refresh the format before exposing its physical lock namespace.
-	_, err = m.Load(true)
-	return err
 }
 
 func (m *kvMeta) doInit(format *Format, force bool) error {

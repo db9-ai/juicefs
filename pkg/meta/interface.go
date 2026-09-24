@@ -34,7 +34,7 @@ import (
 
 const (
 	// MaxVersion is the max of supported versions.
-	MaxVersion = 4
+	MaxVersion = 2
 	// ChunkBits is the size of a chunk.
 	ChunkBits = 26
 	// ChunkSize is size of a chunk
@@ -476,11 +476,6 @@ type Meta interface {
 	// the new value. Used after TiKV BR clone to prevent slice ID collision
 	// between the original and cloned volumes.
 	AdvanceNextChunk(offset int64) (int64, error)
-	// PrepareCloneFormat is the historical v1/v2 to v3 migration. It rejects v4.
-	// It enables high-bit allocation on an unpublished restored
-	// target. Call before any session or filesystem mount; never on a live volume.
-	// It preserves the source's object identity, counters, references and lock rows.
-	PrepareCloneFormat(ctx Context) error
 	// Write put a slice of data on top of the given chunk.
 	Write(ctx Context, inode Ino, indx uint32, off uint32, slice Slice, mtime time.Time) syscall.Errno
 	// InvalidateChunkCache invalidate chunk cache

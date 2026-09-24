@@ -2126,17 +2126,12 @@ func (m *baseMeta) Read(ctx Context, inode Ino, indx uint32, slices *[]Slice) (s
 	return 0
 }
 
-// PrepareCloneFormat is implemented by transaction-backed metadata drivers.
-func (m *baseMeta) PrepareCloneFormat(ctx Context) error {
-	return fmt.Errorf("clone format preparation is unsupported by this metadata driver")
-}
-
 func (m *baseMeta) AdvanceNextChunk(offset int64) (int64, error) {
 	f, loadErr := m.Load(true)
 	if loadErr != nil {
 		return 0, loadErr
 	}
-	if f.MetaVersion == 2 || f.MetaVersion == 3 || f.MetaVersion == 4 {
+	if f.MetaVersion == 2 {
 		if offset != 0 {
 			return 0, fmt.Errorf("fixed slice offsets are forbidden with shared allocation")
 		}
@@ -2167,23 +2162,14 @@ func (m *baseMeta) NewSlice(ctx Context, id *uint64) syscall.Errno {
 				return syscall.EIO
 			}
 		}
-		if f.MetaVersion == 2 || f.MetaVersion == 3 || f.MetaVersion == 4 {
+		if f.MetaVersion == 2 {
 			if m.conf.SliceAllocator == nil {
 				return syscall.EIO
 			}
-			sequence := GlobalSliceAllocatorID
-			if f.MetaVersion == 2 || f.MetaVersion == 4 {
-				sequence = f.SliceAllocator
-			}
-			start, err := m.conf.SliceAllocator.Reserve(ctx, sequence, sliceIdBatch)
+			start, err := m.conf.SliceAllocator.Reserve(ctx, f.SliceAllocator, sliceIdBatch)
 			if err != nil {
 				logger.Errorf("reserve shared slices: %s", err)
 				return syscall.EIO
-			}
-			if f.MetaVersion == 3 {
-				// Keep the control sequence signed-positive, but place new clone
-				// objects outside the non-overflowed legacy counter domain.
-				start |= uint64(1) << 63
 			}
 			m.freeSlices = freeID{next: start, maxid: start + sliceIdBatch}
 		} else {
