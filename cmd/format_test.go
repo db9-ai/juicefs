@@ -86,3 +86,26 @@ func TestFormat(t *testing.T) {
 		t.Fatalf("unexpected volume: %+v", f)
 	}
 }
+
+func TestFormatStandaloneAllocation(t *testing.T) {
+	uri := "sqlite3://" + t.TempDir() + "/metadata.db"
+	if err := Main([]string{"", "format", "--bucket", t.TempDir(), uri, "standalone"}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := meta.NewClientWithError(uri, meta.DefaultConf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Shutdown()
+	f, err := m.Load(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.MetaVersion != 1 || f.SliceAllocator != "" {
+		t.Fatalf("standalone format requires external allocator: %+v", f)
+	}
+	var id uint64
+	if st := m.NewSlice(meta.Background(), &id); st != 0 || id == 0 {
+		t.Fatalf("standalone allocation: id=%d errno=%v", id, st)
+	}
+}

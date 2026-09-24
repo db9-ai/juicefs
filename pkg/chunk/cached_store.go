@@ -237,13 +237,18 @@ func freePage(p *Page) {
 // slice for write only
 type wSlice struct {
 	rSlice
-	pages       [][]*Page
-	uploaded    int
-	errors      chan error
-	uploadError error
-	pendings    int
-	writeback   bool
-	tierID      uint8
+	// VFS shutdown can abort a slice while its flush goroutine is in Finish.
+	// Serialize finalization so only one caller drains upload results or frees
+	// pages. Neither path calls back into VFS while holding this mutex.
+	finishMu     sync.Mutex
+	pages        [][]*Page
+	uploaded     int
+	errors       chan error
+	uploadError  error
+	uploadFailed atomic.Bool
+	pendings     int
+	writeback    bool
+	tierID       uint8
 }
 
 func sliceForWrite(id uint64, store *cachedStore, tierID uint8) *wSlice {
@@ -314,12 +319,12 @@ func (store *cachedStore) put(ctx context.Context, key string, p *Page) error {
 		store.upLimit.Wait(int64(len(p.Data)))
 	}
 	p.Acquire()
-	var (
-		reqID string
-		sc    = object.DefaultStorageClass
-	)
-	return utils.WithTimeout(ctx, func(ctx context.Context) error {
+	put := func(ctx context.Context) error {
 		defer p.Release()
+		var (
+			reqID string
+			sc    = object.DefaultStorageClass
+		)
 		st := time.Now()
 		err := store.storage.Put(ctx, key, bytes.NewReader(p.Data), object.WithRequestID(&reqID), object.WithStorageClass(&sc))
 		used := time.Since(st)
@@ -330,7 +335,15 @@ func (store *cachedStore) put(ctx context.Context, key string, p *Page) error {
 			store.objectReqErrors.Add(1)
 		}
 		return err
-	}, store.conf.PutTimeout)
+	}
+	if !store.conf.JoinUploads {
+		return utils.WithTimeout(ctx, put, store.conf.PutTimeout)
+	}
+	// Guarded retirement must observe physical completion even if a provider
+	// ignores cancellation. The timeout still reaches providers that honor it.
+	ctx, cancel := context.WithTimeout(ctx, store.conf.PutTimeout)
+	defer cancel()
+	return put(ctx)
 }
 
 func (store *cachedStore) delete(key string) error {
@@ -382,7 +395,7 @@ func (store *cachedStore) upload(ctx context.Context, key string, block *Page, s
 	}
 	for ; try < max; try++ {
 		time.Sleep(time.Second * time.Duration(try*try))
-		if s != nil && s.uploadError != nil {
+		if s != nil && s.uploadFailed.Load() {
 			err = fmt.Errorf("(cancelled) upload block %s: %s (after %d tries)", key, err, try)
 			break
 		}
@@ -515,6 +528,10 @@ func (s *wSlice) FlushTo(offset int) error {
 }
 
 func (s *wSlice) Finish(length int) error {
+	if s.store.conf.JoinUploads {
+		s.finishMu.Lock()
+		defer s.finishMu.Unlock()
+	}
 	if s.length != length {
 		return fmt.Errorf("Length mismatch: %v != %v", s.length, length)
 	}
@@ -523,16 +540,41 @@ func (s *wSlice) Finish(length int) error {
 	if err := s.FlushTo(n * s.store.conf.BlockSize); err != nil {
 		return err
 	}
+	if s.store.conf.JoinUploads {
+		return s.waitUploads()
+	}
 	for i := 0; i < s.pendings; i++ {
 		if err := <-s.errors; err != nil {
 			s.uploadError = err
+			s.uploadFailed.Store(true)
 			return err
 		}
 	}
 	return nil
 }
 
+// Drain even after the first error. In non-writeback mode every result is
+// sent only after its physical PUT returns, so cleanup cannot race a late PUT.
+func (s *wSlice) waitUploads() error {
+	for s.pendings > 0 {
+		err := <-s.errors
+		s.pendings--
+		if err != nil && s.uploadError == nil {
+			s.uploadError = err
+			s.uploadFailed.Store(true)
+		}
+	}
+	return s.uploadError
+}
+
 func (s *wSlice) Abort() {
+	if s.store.conf.JoinUploads {
+		// Cancel queued retries before joining a concurrent Finish.
+		s.uploadFailed.Store(true)
+		s.finishMu.Lock()
+		defer s.finishMu.Unlock()
+		_ = s.waitUploads()
+	}
 	for i := range s.pages {
 		for _, b := range s.pages[i] {
 			freePage(b)
@@ -546,6 +588,10 @@ func (s *wSlice) Abort() {
 
 // Config contains options for cachedStore
 type Config struct {
+	// JoinUploads makes PUT timeouts, Finish errors and Abort wait for started
+	// physical uploads. Enable for v3 clone retirement; false preserves legacy
+	// timeout and early-return behavior. Retirement also requires Writeback=false.
+	JoinUploads            bool
 	CacheDir               string
 	CacheMode              os.FileMode
 	CacheSize              uint64

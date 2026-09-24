@@ -21,6 +21,7 @@ package meta
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"net/url"
 	"os"
@@ -38,6 +39,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv"
+	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnutil"
 	pdopt "github.com/tikv/pd/client/opt"
 	"go.uber.org/zap"
@@ -166,8 +168,16 @@ func newTikvClient(addr string) (tkvClient, error) {
 	}
 
 	prefix := strings.TrimLeft(tUrl.Path, "/")
+	// The codec holds the resolved physical identity, so PD endpoint aliases or
+	// a renamed keyspace cannot split a volume's lock domain. Including the
+	// cluster and metadata path also separates restores across clusters or
+	// prefixes. This identity is runtime configuration, never snapshot data.
+	codec := client.KVStore.GetPDClient().(*tikv.CodecPDClient).GetCodec()
+	lockNamespace := fmt.Sprintf("%d/%d/%d/%x/%x", client.GetPDClient().GetClusterID(context.Background()),
+		codec.GetAPIVersion(), codec.GetKeyspaceMeta().GetKeyspaceIdentity().GetNamespaceId(), codec.GetKeyspace(), prefix)
 	return withPrefix(&tikvClient{
 		client:                     client.KVStore,
+		lockNamespace:              lockNamespace,
 		gcInterval:                 interval,
 		useLatestPointGet:          useLatestPointGet,
 		useFastCommit:              useFastCommit,
@@ -192,10 +202,11 @@ func parseRequiredUint32(query url.Values, name string) (uint32, error) {
 
 type tikvTxn struct {
 	*tikv.KVTxn
+	ctx context.Context
 }
 
 func (tx *tikvTxn) get(key []byte) []byte {
-	value, err := tx.Get(context.TODO(), key)
+	value, err := tx.Get(tx.ctx, key)
 	if tikverr.IsErrNotFound(err) {
 		return nil
 	}
@@ -206,7 +217,7 @@ func (tx *tikvTxn) get(key []byte) []byte {
 }
 
 func (tx *tikvTxn) gets(keys ...[]byte) [][]byte {
-	ret, err := tx.BatchGet(context.TODO(), keys)
+	ret, err := tx.BatchGet(tx.ctx, keys)
 	if err != nil {
 		panic(err)
 	}
@@ -272,6 +283,7 @@ func (tx *tikvTxn) delete(key []byte) {
 
 type tikvClient struct {
 	client                     *tikv.KVStore
+	lockNamespace              string
 	gcInterval                 time.Duration
 	useLatestPointGet          bool
 	useFastCommit              bool
@@ -291,6 +303,9 @@ func (c *tikvClient) shouldRetry(err error) bool {
 }
 
 func (c *tikvClient) config(key string) interface{} {
+	if key == "lockNamespace" {
+		return c.lockNamespace
+	}
 	if key == "startTS" {
 		ts, err := c.client.CurrentTimestamp(oracle.GlobalTxnScope)
 		if err != nil {
@@ -302,13 +317,27 @@ func (c *tikvClient) config(key string) interface{} {
 	return nil
 }
 
+// beginTxn obtains a timestamp with the caller's cancellation before Begin.
+// The SDK's implicit timestamp path uses a background context. A supplied
+// session timestamp or latest-read sentinel must retain its existing semantics.
+func (c *tikvClient) beginTxn(ctx context.Context, startTS uint64) (*tikv.KVTxn, error) {
+	if startTS == 0 {
+		var err error
+		startTS, err = c.client.GetTimestampWithRetry(tikv.NewBackoffer(ctx, transaction.TsoMaxBackoff), oracle.GlobalTxnScope)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return c.client.Begin(tikv.WithStartTS(startTS))
+}
+
 func (c *tikvClient) simpleTxn(ctx context.Context, f func(*kvTxn) error, retry int) (err error) {
-	var opts []tikv.TxnOption
+	var startTS uint64
 	if c.useLatestPointGet {
 		// math.MaxUint64 means to point get the latest committed data without PD access.
-		opts = append(opts, tikv.WithStartTS(math.MaxUint64))
+		startTS = math.MaxUint64
 	}
-	tx, err := c.client.Begin(opts...)
+	tx, err := c.beginTxn(ctx, startTS)
 	if err != nil {
 		return errors.Wrap(err, "failed to begin transaction")
 	}
@@ -321,7 +350,7 @@ func (c *tikvClient) simpleTxn(ctx context.Context, f func(*kvTxn) error, retry 
 			}
 		}
 	}()
-	if err = f(&kvTxn{&tikvTxn{tx}, retry}); err != nil {
+	if err = f(&kvTxn{&tikvTxn{KVTxn: tx, ctx: ctx}, retry}); err != nil {
 		return err
 	}
 	if !tx.IsReadOnly() {
@@ -331,12 +360,12 @@ func (c *tikvClient) simpleTxn(ctx context.Context, f func(*kvTxn) error, retry 
 }
 
 func (c *tikvClient) txn(ctx context.Context, f func(*kvTxn) error, retry int) (err error) {
-	var opts []tikv.TxnOption
+	var startTS uint64
 	if val := ctx.Value(txSessionKey{}); val != nil {
-		opts = append(opts, tikv.WithStartTS(val.(uint64)))
+		startTS = val.(uint64)
 	}
 
-	tx, err := c.client.Begin(opts...)
+	tx, err := c.beginTxn(ctx, startTS)
 	if err != nil {
 		return err
 	}
@@ -350,7 +379,7 @@ func (c *tikvClient) txn(ctx context.Context, f func(*kvTxn) error, retry int) (
 			}
 		}
 	}()
-	if err = f(&kvTxn{&tikvTxn{tx}, retry}); err != nil {
+	if err = f(&kvTxn{&tikvTxn{KVTxn: tx, ctx: ctx}, retry}); err != nil {
 		return err
 	}
 	if !tx.IsReadOnly() {

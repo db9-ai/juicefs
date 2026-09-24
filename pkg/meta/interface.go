@@ -34,14 +34,16 @@ import (
 
 const (
 	// MaxVersion is the max of supported versions.
-	MaxVersion = 1
+	MaxVersion = 2
 	// ChunkBits is the size of a chunk.
 	ChunkBits = 26
 	// ChunkSize is size of a chunk
 	ChunkSize = 1 << ChunkBits // 64M
 	// DeleteSlice is a message to delete a slice from object store.
 	DeleteSlice = 1000
-	// CompactChunk is a message to compact a chunk in object store.
+	// CompactChunk requests object-store compaction with ([]Slice, uint64 ID,
+	// uint8 tier, Context). The trailing context cancels pre-upload work;
+	// guarded callbacks must join started uploads before returning.
 	CompactChunk = 1001
 	// Rmr is a message to remove a directory recursively.
 	Rmr = 1002
@@ -491,6 +493,11 @@ type Meta interface {
 	ListXattr(ctx Context, inode Ino, dbuff *[]byte) syscall.Errno
 	// SetXattr update the extended attribute of a node.
 	SetXattr(ctx Context, inode Ino, name string, value []byte, flags uint32) syscall.Errno
+	// CompareAndSwapXattr atomically replaces one extended attribute only when its
+	// bytes match expected. A nil expected requires absence; non-nil requires an
+	// existing exact byte match. A mismatch returns EAGAIN without writing.
+	// Unsupported metadata drivers return ENOTSUP. TiKV requires a nonempty value.
+	CompareAndSwapXattr(ctx Context, inode Ino, name string, expected, value []byte) syscall.Errno
 	// RemoveXattr removes the extended attribute of a node.
 	RemoveXattr(ctx Context, inode Ino, name string) syscall.Errno
 	// Flock tries to put a lock on given file.

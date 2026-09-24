@@ -17,6 +17,7 @@
 package vfs
 
 import (
+	"context"
 	"errors"
 	"io"
 	"sync"
@@ -388,4 +389,68 @@ func waitForWriteWaiting(t *testing.T, f *fileWriter) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatal("Write did not start waiting for flush")
+}
+
+type lateClosePut struct {
+	object.ObjectStorage
+	entered      chan struct{}
+	release      chan struct{}
+	returned     chan struct{}
+	enteredOnce  sync.Once
+	returnedOnce sync.Once
+}
+
+func (b *lateClosePut) Put(ctx context.Context, key string, in io.Reader, attrs ...object.AttrGetter) error {
+	b.enteredOnce.Do(func() { close(b.entered) })
+	<-b.release
+	defer b.returnedOnce.Do(func() { close(b.returned) })
+	return b.ObjectStorage.Put(context.Background(), key, in, attrs...)
+}
+
+func TestDataWriterCloseJoinsRealTimedOutUpload(t *testing.T) {
+	mem, err := object.CreateStorage("mem", "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob := &lateClosePut{ObjectStorage: mem, entered: make(chan struct{}), release: make(chan struct{}), returned: make(chan struct{})}
+	conf := &chunk.Config{JoinUploads: true, CacheDir: "memory", CacheSize: 1 << 20, BlockSize: 1 << 20, Compress: "none", MaxUpload: 1, MaxDownload: 1, MaxRetries: 1, BufferSize: 32 << 20, PutTimeout: 20 * time.Millisecond}
+	store := chunk.NewCachedStore(blob, *conf, nil)
+	var releaseOnce sync.Once
+	defer store.(io.Closer).Close()
+	defer releaseOnce.Do(func() { close(blob.release) })
+	bw := store.NewWriter(1, 0)
+	if _, err := bw.WriteAt([]byte("x"), 0); err != nil {
+		t.Fatal(err)
+	}
+	w := &dataWriter{conf: &Config{Chunk: conf}, store: store, done: make(chan struct{}), files: make(map[Ino]*fileWriter), bufferSize: 1 << 20}
+	f := &fileWriter{w: w, inode: 1, chunks: make(map[uint32]*chunkWriter)}
+	f.flushcond = utils.NewCond(f)
+	f.writecond = utils.NewCond(f)
+	c := &chunkWriter{indx: 0, file: f}
+	s := &sliceWriter{id: 1, chunk: c, writer: bw, slen: 1, notify: utils.NewCond(f), started: time.Now(), lastMod: time.Now()}
+	c.slices = []*sliceWriter{s}
+	f.chunks[c.indx] = c
+	w.files[f.inode] = f
+	done := make(chan error, 1)
+	go func() { done <- w.Close() }()
+	select {
+	case <-blob.entered:
+	case <-time.After(time.Second):
+		t.Fatal("fixture never entered physical PUT")
+	}
+	time.Sleep(200 * time.Millisecond) // Close's 40ms flush deadline has expired.
+	releaseOnce.Do(func() { close(blob.release) })
+	select {
+	case <-blob.returned:
+	case <-time.After(time.Second):
+		t.Fatal("fixture physical PUT did not return")
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, syscall.EINTR) {
+			t.Fatalf("Close error = %v, want EINTR", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close remains blocked after physical PUT returned")
+	}
 }

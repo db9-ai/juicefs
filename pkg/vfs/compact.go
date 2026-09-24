@@ -34,13 +34,13 @@ var (
 	})
 )
 
-func readSlice(store chunk.ChunkStore, s *meta.Slice, page *chunk.Page, off int) error {
+func readSlice(ctx context.Context, store chunk.ChunkStore, s *meta.Slice, page *chunk.Page, off int) error {
 	buf := page.Data
 	read := 0
 	reader := store.NewReader(s.Id, int(s.Size))
 	for read < len(buf) {
 		p := page.Slice(read, len(buf)-read)
-		n, err := reader.ReadAt(context.Background(), p, off+int(s.Off))
+		n, err := reader.ReadAt(ctx, p, off+int(s.Off))
 		p.Release()
 		if n == 0 && err != nil {
 			return err
@@ -51,9 +51,24 @@ func readSlice(store chunk.ChunkStore, s *meta.Slice, page *chunk.Page, off int)
 	return nil
 }
 
+// Compact compacts slices without caller cancellation.
 func Compact(conf chunk.Config, store chunk.ChunkStore, slices []meta.Slice, id uint64, tierID uint8) error {
+	return CompactContext(context.Background(), conf, store, slices, id, tierID)
+}
+
+// CompactContext permits cancellation of memory admission and source reads.
+// To join started uploads before returning, configure the cached store with
+// JoinUploads. Compaction always disables writeback for its output writer.
+func CompactContext(ctx context.Context, conf chunk.Config, store chunk.ChunkStore, slices []meta.Slice, id uint64, tierID uint8) error {
 	for utils.AllocMemory()-store.UsedMemory() > int64(conf.BufferSize)*3/2 {
-		time.Sleep(time.Millisecond * 100)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	var size uint32
 	for _, s := range slices {
@@ -67,6 +82,10 @@ func Compact(conf chunk.Config, store chunk.ChunkStore, slices []meta.Slice, id 
 
 	var pos int
 	for i, s := range slices {
+		if err := ctx.Err(); err != nil {
+			writer.Abort()
+			return err
+		}
 		if s.Id == 0 {
 			_, err := writer.WriteAt(make([]byte, int(s.Len)), int64(pos))
 			if err != nil {
@@ -80,7 +99,7 @@ func Compact(conf chunk.Config, store chunk.ChunkStore, slices []meta.Slice, id 
 		for read < int(s.Len) {
 			l := min(conf.BlockSize, int(s.Len)-read)
 			p := chunk.NewOffPage(l)
-			if err := readSlice(store, &slices[i], p, read); err != nil {
+			if err := readSlice(ctx, store, &slices[i], p, read); err != nil {
 				logger.Debugf("can't compact to slice %d, retry later, read %d: %s", id, i, err)
 				p.Release()
 				writer.Abort()

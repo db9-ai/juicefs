@@ -991,6 +991,17 @@ func (m *baseMeta) CloseSession() error {
 	m.sesMu.Lock()
 	m.umounting = true
 	m.sesMu.Unlock()
+	// Only guarded clients change the legacy cleanup ordering: their physical
+	// compactions must finish before session locks can be released.
+	if m.conf.CompactionGuard != nil {
+		m.Lock()
+		if m.sessCtx == nil {
+			m.sessCtx = Background()
+		}
+		m.sessCtx.Cancel()
+		m.Unlock()
+		m.sessWG.Wait()
+	}
 	var err error
 	if m.sid > 0 {
 		err = m.en.doCleanStaleSession(m.sid)
@@ -2116,6 +2127,20 @@ func (m *baseMeta) Read(ctx Context, inode Ino, indx uint32, slices *[]Slice) (s
 }
 
 func (m *baseMeta) AdvanceNextChunk(offset int64) (int64, error) {
+	f, loadErr := m.Load(true)
+	if loadErr != nil {
+		return 0, loadErr
+	}
+	if f.MetaVersion == 2 {
+		if offset != 0 {
+			return 0, fmt.Errorf("fixed slice offsets are forbidden with shared allocation")
+		}
+		if m.conf.SliceAllocator == nil {
+			return 0, fmt.Errorf("shared slice allocator unavailable")
+		}
+		next, err := m.conf.SliceAllocator.Reserve(Background(), f.SliceAllocator, 0)
+		return int64(next), err
+	}
 	if offset == 0 {
 		return m.en.getCounter("nextChunk")
 	}
@@ -2123,15 +2148,37 @@ func (m *baseMeta) AdvanceNextChunk(offset int64) (int64, error) {
 }
 
 func (m *baseMeta) NewSlice(ctx Context, id *uint64) syscall.Errno {
+	if m.conf.ReadOnly {
+		return syscall.EROFS
+	}
 	m.freeMu.Lock()
 	defer m.freeMu.Unlock()
 	if m.freeSlices.next >= m.freeSlices.maxid {
-		v, err := m.en.incrCounter("nextChunk", sliceIdBatch)
-		if err != nil {
-			return errno(err)
+		f := m.getFormat()
+		if f == nil {
+			var err error
+			f, err = m.Load(true)
+			if err != nil {
+				return syscall.EIO
+			}
 		}
-		m.freeSlices.next = uint64(v) - sliceIdBatch
-		m.freeSlices.maxid = uint64(v)
+		if f.MetaVersion == 2 {
+			if m.conf.SliceAllocator == nil {
+				return syscall.EIO
+			}
+			start, err := m.conf.SliceAllocator.Reserve(ctx, f.SliceAllocator, sliceIdBatch)
+			if err != nil {
+				logger.Errorf("reserve shared slices: %s", err)
+				return syscall.EIO
+			}
+			m.freeSlices = freeID{next: start, maxid: start + sliceIdBatch}
+		} else {
+			v, err := m.en.incrCounter("nextChunk", sliceIdBatch)
+			if err != nil {
+				return errno(err)
+			}
+			m.freeSlices = freeID{next: uint64(v) - sliceIdBatch, maxid: uint64(v)}
+		}
 	}
 	*id = m.freeSlices.next
 	m.freeSlices.next++
@@ -2291,6 +2338,11 @@ func (m *baseMeta) SetXattr(ctx Context, inode Ino, name string, value []byte, f
 
 	defer m.timeit("SetXattr", time.Now())
 	return m.en.doSetXattr(ctx, m.checkRoot(inode), name, value, flags)
+}
+
+// CompareAndSwapXattr is supported by transaction-backed metadata drivers.
+func (m *baseMeta) CompareAndSwapXattr(ctx Context, inode Ino, name string, expected, value []byte) syscall.Errno {
+	return syscall.ENOTSUP
 }
 
 func (m *baseMeta) RemoveXattr(ctx Context, inode Ino, name string) syscall.Errno {
@@ -2778,6 +2830,20 @@ func (m *baseMeta) compactChunk(inode Ino, indx uint32, once, force bool, tierID
 		m.Unlock()
 		return
 	}
+	ctx := Background()
+	if m.conf.CompactionGuard != nil {
+		if m.sessCtx != nil && m.sessCtx.Canceled() {
+			m.Unlock()
+			return
+		}
+		// Register under the same lock used by CloseSession to stop admission.
+		if m.sessCtx == nil {
+			m.sessCtx = Background()
+		}
+		ctx = m.sessCtx
+		m.sessWG.Add(1)
+		defer m.sessWG.Done()
+	}
 	m.compacting[k] = true
 	m.Unlock()
 	defer func() {
@@ -2786,7 +2852,7 @@ func (m *baseMeta) compactChunk(inode Ino, indx uint32, once, force bool, tierID
 		m.Unlock()
 	}()
 
-	ss, st := m.en.doRead(Background(), inode, indx)
+	ss, st := m.en.doRead(ctx, inode, indx)
 	if st != 0 {
 		return
 	}
@@ -2816,19 +2882,33 @@ func (m *baseMeta) compactChunk(inode Ino, indx uint32, once, force bool, tierID
 		}
 	}
 
+	var release func()
+	if m.conf.CompactionGuard != nil {
+		var err error
+		release, err = m.conf.CompactionGuard(ctx)
+		if err != nil {
+			logger.Debugf("compaction admission for %d:%d: %s", inode, indx, err)
+			return
+		}
+		defer func() {
+			if release != nil {
+				release()
+			}
+		}()
+	}
 	var id uint64
-	if st = m.NewSlice(Background(), &id); st != 0 {
+	if st = m.NewSlice(ctx, &id); st != 0 {
 		return
 	}
 	logger.Debugf("compact %d:%d: skipped %d slices (%d bytes) %d slices (%d bytes)", inode, indx, skipped, pos, len(compacted), size)
 	if tierID == -1 {
 		var attr Attr
-		if eno := m.GetAttr(Background(), inode, &attr); eno != 0 {
+		if eno := m.GetAttr(ctx, inode, &attr); eno != 0 {
 			return
 		}
 		tierID = int(attr.Tier)
 	}
-	err := m.newMsg(CompactChunk, slices, id, uint8(tierID))
+	err := m.newMsg(CompactChunk, slices, id, uint8(tierID), ctx)
 	if err != nil {
 		if !strings.Contains(err.Error(), "not exist") && !strings.Contains(err.Error(), "not found") {
 			logger.Warnf("compact %d %d with %d slices: %s", inode, indx, len(compacted), err)
@@ -2861,6 +2941,10 @@ func (m *baseMeta) compactChunk(inode Ino, indx uint32, once, force bool, tierID
 	}
 
 	if force {
+		if release != nil {
+			release()
+			release = nil
+		}
 		m.Lock()
 		delete(m.compacting, k)
 		m.Unlock()
