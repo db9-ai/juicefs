@@ -94,10 +94,11 @@ completion boundary. Compaction already disables writeback.
 
 `meta.Config.CompactionGuard` admits compactions through a retirement guard,
 cancels them on close, and joins them before releasing session locks. FS9 enables
-these new lifecycle options only for version 4 families. Without those options,
-clients retain the existing PUT timeout, first-error Finish, immediate Abort,
-background compaction contexts and session cleanup ordering. `CompactContext`
-is explicitly cancellable; the existing `Compact` uses a background context.
+both lifecycle options for new version 4 families and retains them for the
+historical version 3 draft protocol. Production version 1 and 2 families retain
+the existing PUT timeout, first-error Finish, immediate Abort, background
+compaction contexts and session cleanup ordering. `CompactContext` is explicitly
+cancellable; the existing `Compact` uses a background context.
 
 TiKV reads and timestamp acquisition honor their supplied context. This changes
 no keys, counters or backend dependencies, but canceled ordinary reads may
