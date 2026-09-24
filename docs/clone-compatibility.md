@@ -1,10 +1,11 @@
-# FS9 clone metadata compatibility
+# FS9 family metadata protocols
 
 FS9 restores raw TiKV metadata while retaining the source volume's object
-identity. Source and target can therefore refer to the same objects. New writes
-must receive distinct slice IDs, and copied locks must not become live owners in
-the target. Existing version 1 volumes remain mountable without an offline
-metadata migration.
+identity. Source and target can therefore refer to the same objects. The stored
+metadata version selects the family's protocol. Existing families and every
+future descendant preserve that version; only a genuinely new, empty root
+family selects version 4. Existing families retain their known allocation and
+lifecycle limitations. Mounting or cloning them does not migrate their protocol.
 
 ## Allocation and locks
 
@@ -12,81 +13,96 @@ metadata migration.
 | --- | --- | --- |
 | 1, with or without a runtime allocator | Existing private `nextChunk` counter | Existing unscoped keys |
 | 2 | Existing per-family external sequence | Existing physical-keyspace scope |
-| 3 | Global ordinal with bit 63 set | Same physical-keyspace scope as version 2 |
+| 3 | Existing global ordinal with bit 63 set | Existing physical-keyspace scope |
+| 4 | Per-family external sequence, positive IDs in batches of 4096 | Physical-keyspace scope |
 
 Version 1 ignores `Config.SliceAllocator`, including an unavailable allocator.
-Its format, allocation ranges, private counter and lock layout retain their
-existing contract. Version 2 keeps its per-family sequence. Only a stored version
-3 format enables global high-bit allocation. This separation assumes historical
-signed legacy counters have never overflowed into the high-bit domain.
+Versions 2 and 3 keep their allocation and lock contracts. Version 4 uses the
+same allocator range semantics as version 2, with an immutable family identity
+in `Format.SliceAllocator`. Clones retain that identity and share its sequence.
+The deployment assigns each new root family a distinct physical object prefix,
+so version 4 can start at ID 1 without colliding with existing families. It does
+not depend on a high-bit separation assumption about historical IDs.
 
-The deployment provisions `GlobalSliceAllocatorID` exactly once, initially at
-ordinal 1, in a control keyspace excluded from all tenant snapshots and restores.
-Each reservation commits a signed-positive ordinal range before returning it;
-setting bit 63 yields the object ID. Ambiguous commits may waste ranges but must
-never reuse them. A missing, corrupt, or exhausted configured allocator fails
-allocation. Mount and clone preparation never create or reset its record. A lost
-control keyspace requires explicit recovery above every previously reserved
-ordinal, including abandoned reservations; initializing it again at 1 is unsafe.
+The deployment provisions each version 4 family sequence once in a control
+keyspace excluded from tenant snapshots and restores. Each 4096-ID reservation
+commits before returning it. Unused IDs from abandoned ranges and ambiguous
+commits must never be reused. The sequence never wraps into bit 63. A missing,
+corrupt, or exhausted configured allocator fails allocation; mounts and clones
+never create or reset its record. A lost control keyspace requires explicit
+recovery above every previously reserved ID, including abandoned reservations.
 
-Version 2 keeps its existing per-family allocation and lock contract. It is not
-silently switched to the global sequence.
+Physical lock scopes derive from the resolved TiKV cluster, keyspace and
+metadata prefix, not the cloned format UUID. Replicas of a target contend on the
+same keys. Restored source lock rows remain untouched and do not participate in
+the target scope. Version 1 retains its original unscoped layout.
 
-## Preparing an unpublished clone
+## Preparing an unpublished version 4 clone
 
-`Meta.PrepareCloneFormat(ctx)` is called after restore and authority validation,
-before the target has any session, mount, or lock owner. The caller owns this
-unpublished-target precondition; the method is not a live-volume migration API.
+The caller validates the restored format with `Meta.Load(true)`, requires
+`MetaVersion == 4` and the expected `SliceAllocator`, and verifies the already
+provisioned sequence with `SliceAllocator.Reserve(ctx, family, 0)`. The format is
+immutable within the family. Preparation does not rewrite it, reserve IDs,
+change counters or references, start a metadata session, or acquire a persistent
+flock.
 
-Preparation verifies the global control record and physical metadata lock
-identity, then changes only the stored format's `MetaVersion` and
-`SliceAllocator` fields. Every other setting, including unknown fields, and all
-counters, references, session rows, and lock rows are retained. Repeated
-preparation is harmless. The client refreshes its cached format before returning,
-so its first target fence uses the target's physical namespace. Replicas of that
-target contend on the same lock keys; copied source locks remain untouched and
-do not participate. Older clients reject version 3.
+`Meta.CompareAndSwapXattr` atomically rebinds the target's authority attribute
+from the exact restored source bytes to the target bytes. Nil expected bytes
+require absence; a non-nil expectation requires an existing byte-for-byte match.
+A mismatch returns `EAGAIN` without writing. The transaction changes only that
+attribute, and replay handling belongs to the caller: after an ambiguous result,
+read and validate the target authority. Semantically equal JSON is not an exact
+byte match. Unsupported metadata drivers return `ENOTSUP`; TiKV requires a
+nonempty replacement value. This API creates no durable lock owner that a
+preparation crash could strand.
+
+The caller owns the unpublished-target precondition and completes validation
+and authority rebinding before exposing the target for mounts. This is not a
+live-volume migration procedure.
+
+The historical `Meta.PrepareCloneFormat(ctx)` API remains available for its
+original unpublished v1/v2-to-v3 migration contract. It preserves unrelated
+format fields, including unknown settings, but is not called by the family
+version rollout. It explicitly rejects version 4. Old clients that support only
+versions 1–3 reject a version 4 format.
 
 ## Maintenance compatibility limits
 
-Old mounts can read and write the legacy metadata layout, but this does **not**
-make every old maintenance command safe. Older `juicefs gc` implementations parse
-object IDs with signed `strconv.Atoi` and ignore overflow errors. They can treat
-referenced high-bit objects as leaks and delete them with `--delete`. Such GC
-binaries must not run against storage containing high-bit objects. The updated GC
-uses unsigned parsing and leaves unparseable object IDs untouched.
+Version 3 still uses `GlobalSliceAllocatorID` and high-bit object IDs. Its
+historical separation from legacy counters assumes those counters never
+entered the high-bit domain. Older `juicefs gc` implementations parse IDs with
+signed `strconv.Atoi` and ignore overflow errors; they can mistake referenced
+high-bit objects for leaks. They must not run against that storage. The updated
+GC uses unsigned parsing and leaves unparseable IDs untouched.
 
-Even the updated generic per-volume GC is not a clone-family collector: it sees
-only one volume's references. A shared source/clone object namespace requires
-family-wide retention and GC ownership; unsigned parsing alone does not make a
-per-volume sweep safe. These operational restrictions must be enforced by the
-FS9 deployment before enabling allocation or clones.
+Generic per-volume GC is not a clone-family collector: it sees only one
+volume's references. Shared source/clone storage requires family-wide retention
+and GC ownership, regardless of metadata version or ID range. The deployment
+owns this restriction.
 
-TiKV binary slice records and JSON dump/load preserve the full unsigned ID.
-High-bit IDs do not advance the signed private counter when loading a JSON dump.
-This FS9 compatibility contract covers TiKV metadata; it does not establish
-high-bit support for SQL schemas or unrelated metadata drivers.
+TiKV binary slice records and JSON dump/load preserve unsigned IDs. High-bit
+IDs do not advance the signed private counter on JSON load. This contract covers
+TiKV metadata; it does not establish high-bit support for SQL or other drivers.
 
 ## Runtime upload and compaction boundaries
 
-Legacy clients keep the existing PUT timeout, first-error Finish and immediate
-Abort behavior. `chunk.Config.JoinUploads` is an explicit version 3 integration
-option: it joins started physical PUTs even when providers ignore cancellation,
-drains remaining upload results after an error, and serializes Finish with Abort.
-Its use for retirement requires `Writeback=false`; staged background uploads do
-not establish that physical completion boundary. Compaction already disables
-writeback in the baseline implementation and continues to do so.
+JuiceFS keeps lifecycle changes opt-in. `chunk.Config.JoinUploads` joins started
+physical PUTs even when providers ignore cancellation, drains remaining results
+after an error, and serializes Finish with Abort. Retirement requires
+`Writeback=false`; staged background uploads do not establish that physical
+completion boundary. Compaction already disables writeback.
 
-Only clients configured with `meta.Config.CompactionGuard` admit compactions
-through a retirement guard, cancel them on close, and join them before releasing
-session locks. FS9 configures this hook only for version 3. Legacy clients retain
-background compaction contexts and the original session cleanup ordering.
-`CompactContext` is explicitly cancellable; the existing `Compact` entry point
-continues to use a background context.
+`meta.Config.CompactionGuard` admits compactions through a retirement guard,
+cancels them on close, and joins them before releasing session locks. FS9 enables
+these new lifecycle options only for version 4 families. Without those options,
+clients retain the existing PUT timeout, first-error Finish, immediate Abort,
+background compaction contexts and session cleanup ordering. `CompactContext`
+is explicitly cancellable; the existing `Compact` uses a background context.
 
-TiKV reads and timestamp acquisition now honor their supplied context. This
-corrects cancellation propagation without changing keys, counters or backend
-dependencies, but canceled ordinary reads may return earlier than older builds.
-The upload and compaction guarantees above concern orderly process shutdown.
-They do not establish crash-safe GC: durable sid=0 lock ownership and recovery
-remain an unresolved blocker.
+TiKV reads and timestamp acquisition honor their supplied context. This changes
+no keys, counters or backend dependencies, but canceled ordinary reads may
+return earlier than older builds.
+
+These lifecycle guarantees concern orderly shutdown. They do not establish
+crash-safe GC: durable sid=0 lock ownership and recovery remain an unresolved
+blocker. A timeout or TTL is not evidence that an admitted writer has stopped.

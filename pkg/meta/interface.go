@@ -34,7 +34,7 @@ import (
 
 const (
 	// MaxVersion is the max of supported versions.
-	MaxVersion = 3
+	MaxVersion = 4
 	// ChunkBits is the size of a chunk.
 	ChunkBits = 26
 	// ChunkSize is size of a chunk
@@ -476,7 +476,8 @@ type Meta interface {
 	// the new value. Used after TiKV BR clone to prevent slice ID collision
 	// between the original and cloned volumes.
 	AdvanceNextChunk(offset int64) (int64, error)
-	// PrepareCloneFormat enables high-bit allocation on an unpublished restored
+	// PrepareCloneFormat is the historical v1/v2 to v3 migration. It rejects v4.
+	// It enables high-bit allocation on an unpublished restored
 	// target. Call before any session or filesystem mount; never on a live volume.
 	// It preserves the source's object identity, counters, references and lock rows.
 	PrepareCloneFormat(ctx Context) error
@@ -497,6 +498,11 @@ type Meta interface {
 	ListXattr(ctx Context, inode Ino, dbuff *[]byte) syscall.Errno
 	// SetXattr update the extended attribute of a node.
 	SetXattr(ctx Context, inode Ino, name string, value []byte, flags uint32) syscall.Errno
+	// CompareAndSwapXattr atomically replaces one extended attribute only when its
+	// bytes match expected. A nil expected requires absence; non-nil requires an
+	// existing exact byte match. A mismatch returns EAGAIN without writing.
+	// Unsupported metadata drivers return ENOTSUP. TiKV requires a nonempty value.
+	CompareAndSwapXattr(ctx Context, inode Ino, name string, expected, value []byte) syscall.Errno
 	// RemoveXattr removes the extended attribute of a node.
 	RemoveXattr(ctx Context, inode Ino, name string) syscall.Errno
 	// Flock tries to put a lock on given file.

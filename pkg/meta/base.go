@@ -2136,7 +2136,7 @@ func (m *baseMeta) AdvanceNextChunk(offset int64) (int64, error) {
 	if loadErr != nil {
 		return 0, loadErr
 	}
-	if f.MetaVersion == 2 || f.MetaVersion == 3 {
+	if f.MetaVersion == 2 || f.MetaVersion == 3 || f.MetaVersion == 4 {
 		if offset != 0 {
 			return 0, fmt.Errorf("fixed slice offsets are forbidden with shared allocation")
 		}
@@ -2167,12 +2167,12 @@ func (m *baseMeta) NewSlice(ctx Context, id *uint64) syscall.Errno {
 				return syscall.EIO
 			}
 		}
-		if f.MetaVersion == 2 || f.MetaVersion == 3 {
+		if f.MetaVersion == 2 || f.MetaVersion == 3 || f.MetaVersion == 4 {
 			if m.conf.SliceAllocator == nil {
 				return syscall.EIO
 			}
 			sequence := GlobalSliceAllocatorID
-			if f.MetaVersion == 2 {
+			if f.MetaVersion == 2 || f.MetaVersion == 4 {
 				sequence = f.SliceAllocator
 			}
 			start, err := m.conf.SliceAllocator.Reserve(ctx, sequence, sliceIdBatch)
@@ -2352,6 +2352,11 @@ func (m *baseMeta) SetXattr(ctx Context, inode Ino, name string, value []byte, f
 
 	defer m.timeit("SetXattr", time.Now())
 	return m.en.doSetXattr(ctx, m.checkRoot(inode), name, value, flags)
+}
+
+// CompareAndSwapXattr is supported by transaction-backed metadata drivers.
+func (m *baseMeta) CompareAndSwapXattr(ctx Context, inode Ino, name string, expected, value []byte) syscall.Errno {
+	return syscall.ENOTSUP
 }
 
 func (m *baseMeta) RemoveXattr(ctx Context, inode Ino, name string) syscall.Errno {

@@ -243,14 +243,14 @@ func (m *kvMeta) xattrKey(inode Ino, name string) []byte {
 	return m.fmtKey("A", inode, "X", name)
 }
 
-// lockPrefix binds v2/v3 coordination to the actual metadata backend identity,
+// lockPrefix binds v2/v3/v4 coordination to the actual metadata backend identity,
 // not the cloned format UUID. Raw snapshots retain source lock rows, but those
 // rows cannot admit or block operations in a different physical keyspace.
-// Version 1 retains its existing wire layout. Version 3 is installed only on
-// unpublished clone targets; live legacy volumes never change their lock keys.
+// Version 1 retains its existing wire layout. Version 4 is selected only for
+// new physical families; existing volumes never change their lock keys.
 func (m *kvMeta) lockPrefix(kind string) []byte {
 	format := m.getFormat()
-	if m.lockNamespace != "" && (format.MetaVersion == 2 || format.MetaVersion == 3) {
+	if m.lockNamespace != "" && (format.MetaVersion == 2 || format.MetaVersion == 3 || format.MetaVersion == 4) {
 		return m.fmtKey(kind, "2/", m.lockNamespace, "/")
 	}
 	return m.fmtKey(kind)
@@ -498,6 +498,9 @@ func (m *kvMeta) PrepareCloneFormat(ctx Context) error {
 		}
 		if err := format.CheckVersion(); err != nil {
 			return err
+		}
+		if format.MetaVersion >= 4 {
+			return fmt.Errorf("metadata version %d cannot use legacy clone migration", format.MetaVersion)
 		}
 		if format.MetaVersion == 3 {
 			return nil
@@ -3204,6 +3207,26 @@ func (m *kvMeta) doSetXattr(ctx Context, inode Ino, name string, value []byte, f
 		if v == nil || !bytes.Equal(v, value) {
 			tx.set(key, value)
 		}
+		return nil
+	}))
+}
+
+// CompareAndSwapXattr compares and replaces a single xattr in one transaction.
+func (m *kvMeta) CompareAndSwapXattr(ctx Context, inode Ino, name string, expected, value []byte) syscall.Errno {
+	if m.conf.ReadOnly {
+		return syscall.EROFS
+	}
+	if name == "" || (len(value) == 0 && m.Name() == "tikv") {
+		return syscall.EINVAL
+	}
+	defer m.timeit("CompareAndSwapXattr", time.Now())
+	key := m.xattrKey(m.checkRoot(inode), name)
+	return errno(m.txn(ctx, func(tx *kvTxn) error {
+		current := tx.get(key)
+		if (current == nil) != (expected == nil) || !bytes.Equal(current, expected) {
+			return syscall.EAGAIN
+		}
+		tx.set(key, value)
 		return nil
 	}))
 }
