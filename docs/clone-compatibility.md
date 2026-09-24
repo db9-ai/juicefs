@@ -88,9 +88,10 @@ TiKV metadata; it does not establish high-bit support for SQL or other drivers.
 
 JuiceFS keeps lifecycle changes opt-in. `chunk.Config.JoinUploads` joins started
 physical PUTs even when providers ignore cancellation, drains remaining results
-after an error, and serializes Finish with Abort. Retirement requires
-`Writeback=false`; staged background uploads do not establish that physical
-completion boundary. Compaction already disables writeback.
+after an error, and serializes Finish with Abort. That physical completion
+boundary requires `Writeback=false`; staged background uploads do not establish
+it. Compaction already disables writeback. These orderly shutdown guarantees
+are separate from irreversible version 4 retirement.
 
 `meta.Config.CompactionGuard` admits compactions through a retirement guard,
 cancels them on close, and joins them before releasing session locks. FS9 enables
@@ -104,6 +105,25 @@ TiKV reads and timestamp acquisition honor their supplied context. This changes
 no keys, counters or backend dependencies, but canceled ordinary reads may
 return earlier than older builds.
 
-These lifecycle guarantees concern orderly shutdown. They do not establish
-crash-safe GC: durable sid=0 lock ownership and recovery remain an unresolved
-blocker. A timeout or TTL is not evidence that an admitted writer has stopped.
+Version 4 retirement advances ordinary root authority from NORMAL to GC_PENDING,
+then to GC_COMPLETE, using exact-byte xattr CAS. It does not acquire a persistent
+Flock, so a crashed sid=0 holder cannot block that transition. The backend must
+first authorize irreversible retirement and exclude conflicting lifecycle work;
+final family GC additionally requires every member and restore dependency to
+have retired. FS9 rejects pending mutations, migration bindings, receipts,
+quarantine and unknown authority fields. Existing versions 1, 2 and 3 retain
+their previous retirement paths and limitations.
+
+GC_PENDING rejects new foreground and compaction admissions. An already admitted
+writer may still finish against dead member metadata; its ordinary completion
+cannot restore NORMAL. This neither repairs stale locks on an active volume nor
+promises general lock recovery. A timeout, TTL or CAS receipt is not evidence
+that an admitted writer or provider PUT has physically stopped.
+
+GC_COMPLETE records a collection pass that observed an empty chunk prefix with
+no reported failures. Young objects and incomplete passes remain pending. An
+extremely late provider PUT can leave an orphan after that observation; no
+permanent or recurring sweep is promised. The
+[FS9 retirement contract](https://github.com/db9-ai/fs9/blob/ebe9d1060f5038cf1f82fa86f42ddbfef2c5bfdf/docs/design/family_retirement.md)
+owns these admission and completion rules. This protocol description is not
+passing evidence for the separate real TiKV SIGKILL qualification gate.
