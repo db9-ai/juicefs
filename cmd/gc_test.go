@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juicedata/juicefs/pkg/meta"
 	"github.com/juicedata/juicefs/pkg/utils"
 	"github.com/stretchr/testify/require"
 )
@@ -108,4 +109,37 @@ func TestGc(t *testing.T) {
 	if err := Main([]string{"", "gc", testMeta}); err != nil {
 		t.Fatalf("gc failed: %s", err)
 	}
+}
+
+// Exercise the actual destructive GC path without requiring a FUSE mount.
+func TestGcPreservesHighBitSliceObjects(t *testing.T) {
+	conf := meta.DefaultConf()
+	conf.NoBGJob = true
+	m, err := meta.NewClientWithError("memkv://high-bit-gc", conf)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, m.Shutdown()) })
+	require.NoError(t, m.Reset())
+	bucket := t.TempDir() + "/"
+	require.NoError(t, m.Init(&meta.Format{Name: "high-bit-gc", UUID: "high-bit-gc", Storage: "file", Bucket: bucket, BlockSize: 4096, MetaVersion: 1}, false))
+	ctx := meta.Background()
+	var inode meta.Ino
+	require.Zero(t, m.Mknod(ctx, meta.RootInode, "file", meta.TypeFile, 0644, 0, 0, "", &inode, nil))
+	id := uint64(1)<<63 | 17
+	require.Zero(t, m.Write(ctx, inode, 0, 0, meta.Slice{Id: id, Size: 4096, Len: 4096}, time.Now()))
+	// Return this same in-memory metadata to the CLI, so its reference scan is real.
+	meta.Register("high-bit-gc", func(string, string, *meta.Config) (meta.Meta, error) { return m, nil })
+	dataDir := filepath.Join(bucket, "high-bit-gc", "chunks", "0", "0")
+	require.NoError(t, os.MkdirAll(dataDir, 0755))
+	valid := filepath.Join(dataDir, fmt.Sprintf("%d_0_4096", id))
+	leaked := filepath.Join(dataDir, fmt.Sprintf("%d_0_4096", id+1))
+	malformed := filepath.Join(dataDir, "18446744073709551616_0_4096")
+	old := time.Now().Add(-2 * time.Hour)
+	for _, filename := range []string{valid, leaked, malformed} {
+		require.NoError(t, os.WriteFile(filename, make([]byte, 4096), 0644))
+		require.NoError(t, os.Chtimes(filename, old, old))
+	}
+	require.NoError(t, Main([]string{"", "gc", "--delete", "high-bit-gc://test"}))
+	require.FileExists(t, valid)
+	require.NoFileExists(t, leaked)
+	require.FileExists(t, malformed, "unparseable object IDs must not be deleted")
 }

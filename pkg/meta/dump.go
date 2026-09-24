@@ -559,7 +559,8 @@ func decodeEntry(dec *json.Decoder, parent Ino, cs *DumpedCounters, parents map[
 						if addChunk != nil && refs[ck] == 1 {
 							addChunk(&ck)
 						}
-						if cs.NextChunk <= int64(s.Id) {
+						// High-bit IDs come from an external sequence, not the legacy counter.
+						if s.Id < uint64(1)<<63 && cs.NextChunk <= int64(s.Id) {
 							cs.NextChunk = int64(s.Id) + 1
 						}
 					}

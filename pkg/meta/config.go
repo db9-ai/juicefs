@@ -42,7 +42,10 @@ type Config struct {
 	// admission leaves the existing slices unchanged. The hook must not change
 	// after the client starts; nil preserves the default compaction behavior.
 	CompactionGuard func(Context) (release func(), err error) `json:"-"`
-	// SliceAllocator is required for metadata v2. It is never copied in snapshots.
+	// SliceAllocator supplies external ID sequences for metadata v2/v3.
+	// On legacy formats, explicit configuration opts new allocations into the
+	// global high-bit domain without changing the stored format or private counter.
+	// It is a runtime dependency and is never copied in tenant snapshots.
 	SliceAllocator     *SliceAllocator
 	Retries            int
 	MaxDeletes         int
@@ -181,8 +184,12 @@ func (f *Format) CheckVersion() error {
 		if _, err := sliceAllocatorKey(f.SliceAllocator); err != nil {
 			return err
 		}
+	} else if f.MetaVersion == 3 {
+		if f.SliceAllocator != GlobalSliceAllocatorID {
+			return fmt.Errorf("metadata version 3 requires the global slice sequence")
+		}
 	} else if f.SliceAllocator != "" {
-		return fmt.Errorf("shared slice allocator requires metadata version 2")
+		return fmt.Errorf("shared slice allocator requires metadata version 2 or 3")
 	}
 	if f.MetaVersion > MaxVersion {
 		return fmt.Errorf("incompatible metadata version: %d; please upgrade the client", f.MetaVersion)

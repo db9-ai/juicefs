@@ -312,14 +312,18 @@ func gc(ctx *cli.Context) error {
 			continue
 		}
 		bar.Increment()
-		cid, _ := strconv.Atoi(parts[0])
-		size := vkeys[uint64(cid)]
+		cid, err := strconv.ParseUint(parts[0], 10, 64)
+		if err != nil {
+			logger.Warnf("ignore malformed chunk ID in object %s: %s", obj.Key(), err)
+			continue
+		}
+		size := vkeys[cid]
 		var pobj, cobj bool
 		if size == 0 {
-			size, pobj = pkeys[uint64(cid)]
+			size, pobj = pkeys[cid]
 		}
 		if size == 0 {
-			size, cobj = ckeys[uint64(cid)]
+			size, cobj = ckeys[cid]
 		}
 		if size == 0 {
 			logger.Debugf("find leaked object: %s, size: %d", obj.Key(), obj.Size())
