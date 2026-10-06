@@ -361,3 +361,7 @@ replace github.com/mattn/go-colorable v0.0.9 => github.com/juicedata/go-colorabl
 replace github.com/cloudsoda/go-smb2 => github.com/juicedata/go-smb2 v0.0.0-20260310064141-58f27d06634e
 
 replace github.com/hashicorp/golang-lru/v2 v2.0.7 => github.com/juicedata/golang-lru/v2 v2.0.8-0.20251126062551-1b321869f904
+
+replace github.com/tikv/pd/client => github.com/db9-ai/pd/client v0.0.0-20261006051025-7be0c6795f9c
+
+replace github.com/tikv/client-go/v2 => github.com/db9-ai/client-go/v2 v2.0.0-20261006052440-21218a9a69ff
