@@ -113,7 +113,7 @@ start_meta_engine(){
     elif [ "$meta" == "tikv" ]; then
         retry install_tikv
     elif [ "$meta" == "badger" ]; then
-        sudo --preserve-env=GOPRIVATE,GO_DEPENDENCY_TOKEN,GIT_CONFIG_COUNT,GIT_CONFIG_KEY_0,GIT_CONFIG_VALUE_0,GIT_CONFIG_KEY_1,GIT_CONFIG_VALUE_1 go get github.com/dgraph-io/badger/v3
+        sudo --preserve-env=GOPRIVATE,GO_DEPENDENCY_TOKEN,GIT_CONFIG_PARAMETERS go get github.com/dgraph-io/badger/v3
     elif [ "$meta" == "mariadb" ]; then
         if lsof -i:3306; then
             echo "mariadb is already running"
