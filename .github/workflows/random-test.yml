@@ -159,6 +159,10 @@ jobs:
             grep "<FATAL>:" /var/log/juicefs.log && exit 1 || true
           fi
       
+      - name: Metadata service diagnostics
+        if: failure()
+        run: bash .github/scripts/meta_diagnostics.sh
+
       - name: upload coverage report
         timeout-minutes: 5
         continue-on-error: true

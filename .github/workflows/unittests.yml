@@ -131,6 +131,10 @@ jobs:
           test=${{matrix.test}}
           make $test
 
+      - name: Metadata service diagnostics
+        if: failure()
+        run: bash .github/scripts/meta_diagnostics.sh
+
       - name: upload coverage report
         timeout-minutes: 5
         continue-on-error: true
