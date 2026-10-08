@@ -20,7 +20,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.72.3
 	github.com/aws/smithy-go v1.22.2
 	github.com/baidubce/bce-sdk-go v0.9.263
-	github.com/bytedance/mockey v1.2.14
+	github.com/bytedance/mockey v1.4.5
 	github.com/ceph/go-ceph v0.18.0
 	github.com/charlievieth/fastwalk v1.0.14
 	github.com/cloudsoda/go-smb2 v0.0.0-20250228001242-d4c70e6251cc
