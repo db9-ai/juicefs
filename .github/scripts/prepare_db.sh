@@ -61,26 +61,14 @@ install_keydb() {
 }
 
 install_minio() {
-    # Build the existing fixture version from source because its image cannot be pulled.
-    (
-        set -e
-        minio_source=$(mktemp -d)
-        trap 'rm -rf "$minio_source"' EXIT
-        git clone --depth 1 --branch RELEASE.2022-01-25T19-56-04Z \
-            https://github.com/minio/minio.git "$minio_source/src"
-        mkdir "$minio_source/image"
-        (
-            cd "$minio_source/src"
-            CGO_ENABLED=0 go build -trimpath -o "$minio_source/image/minio" .
-        )
-        cp /etc/ssl/certs/ca-certificates.crt "$minio_source/image/"
-        docker build -t juicefs-ci-minio:RELEASE.2022-01-25T19-56-04Z \
-            -f .github/scripts/minio.Dockerfile "$minio_source/image"
-        docker run -d -p 9000:9000 -p 9001:9001 \
-            -e "MINIO_ROOT_USER=testUser" -e "MINIO_ROOT_PASSWORD=testUserPassword" \
-            juicefs-ci-minio:RELEASE.2022-01-25T19-56-04Z server /data --console-address ":9001"
-    )
-    go install github.com/minio/mc@RELEASE.2022-01-07T06-01-38Z && mc alias set local http://127.0.0.1:9000 testUser testUserPassword && mc mb local/testbucket
+    bash .github/scripts/minio_fixture.sh image
+    docker run -d -p 9000:9000 -p 9001:9001 \
+        -e "MINIO_ROOT_USER=testUser" -e "MINIO_ROOT_PASSWORD=testUserPassword" \
+        juicefs-ci-minio:RELEASE.2022-01-25T19-56-04Z server /data --console-address ":9001"
+    mkdir -p "$(go env GOPATH)/bin"
+    bash .github/scripts/minio_fixture.sh mc "$(go env GOPATH)/bin/mc"
+    mc alias set local http://127.0.0.1:9000 testUser testUserPassword
+    mc mb local/testbucket
 }
 
 install_fdb() {

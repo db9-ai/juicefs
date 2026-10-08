@@ -102,7 +102,7 @@ jobs:
 
       - name: Install tools
         run: | 
-          wget -q https://dl.minio.io/client/mc/release/linux-amd64/mc
+          bash .github/scripts/minio_fixture.sh mc ./mc
           chmod +x mc 
         shell: bash
         

@@ -17,14 +17,15 @@ META_URL2=$(get_meta_url $META2)
 trap "echo random seed is $SEED" EXIT
 
 if ! docker ps | grep -q minio; then
+    bash .github/scripts/minio_fixture.sh image
     docker run -d -p 9000:9000 --name minio \
             -e "MINIO_ACCESS_KEY=minioadmin" \
             -e "MINIO_SECRET_KEY=minioadmin" \
             -v /tmp/data:/data \
             -v /tmp/config:/root/.minio \
-            minio/minio server /data
+            juicefs-ci-minio:RELEASE.2022-01-25T19-56-04Z server /data
 fi
-[[ ! -f /usr/local/bin/mc ]] && wget -q https://dl.minio.io/client/mc/release/linux-amd64/mc -O /usr/local/bin/mc && chmod +x /usr/local/bin/mc
+[[ -x /usr/local/bin/mc ]] || bash .github/scripts/minio_fixture.sh mc /usr/local/bin/mc
 sleep 3s
 mc alias set myminio http://localhost:9000 minioadmin minioadmin
 [[ ! -x random-test ]] && wget -q https://juicefs-com-static.oss-cn-shanghai.aliyuncs.com/random-test/random-test -O random-test && chmod +x random-test
