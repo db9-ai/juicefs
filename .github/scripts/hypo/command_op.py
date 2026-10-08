@@ -335,7 +335,7 @@ class CommandOperation:
     
     def do_config(self, capacity, inodes, trash_days, enable_acl, encrypt_secret, force, yes, user):
         try:
-            cmd = f'sudo -u {user} ./juicefs config {shlex.quote(self.meta_url)} --capacity {capacity} --inodes {inodes} --trash-days {trash_days} --enable-acl {enable_acl} --encrypt-secret {encrypt_secret}'
+            cmd = f'sudo -u {user} ./juicefs config {shlex.quote(self.meta_url)} --capacity {capacity} --inodes {inodes} --trash-days {trash_days} --enable-acl={str(enable_acl).lower()} --encrypt-secret={str(encrypt_secret).lower()}'
             if force:
                 cmd += ' --force'
             if yes:
