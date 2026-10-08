@@ -156,16 +156,17 @@ jobs:
           $env:PATH+=";C:\mingw64\bin"
           go build -ldflags="-s -w" -o juicefs.exe .
 
-      - name: Install Python3
-        run: |
-          choco install python3 -y
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       - name: Wins_fs_test
         run: |
           ./juicefs.exe format redis://127.0.0.1:6379/1 myjfs
           $env:PATH+=";C:\Program Files (x86)\WinFsp\bin"
           ./juicefs.exe mount -d redis://127.0.0.1:6379/1 z:
-          python3 .github/scripts/wins_fs_test.py
+          python .github/scripts/wins_fs_test.py
 
       - name: Test Gc
         timeout-minutes: 10
