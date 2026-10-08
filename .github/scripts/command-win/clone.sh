@@ -10,7 +10,12 @@ test_clone_with_jfs_source()
     ./juicefs.exe format $META_URL myjfs
     ./juicefs.exe mount -d $META_URL z:
     ls /z
-    [[ ! -d /z/juicefs ]] && git clone --verbose --progress https://github.com/juicedata/juicefs.git /z/juicefs --depth 1
+    if [[ ! -d /z/juicefs ]]; then
+        echo "Downloading the clone fixture"
+        git clone --verbose --progress --no-checkout https://github.com/juicedata/juicefs.git /z/juicefs --depth 1
+        echo "Checking out the clone fixture"
+        GIT_TRACE2_EVENT=1 git -C /z/juicefs checkout --force HEAD
+    fi
     ls /z/juicefs
     do_clone true
     echo "test clone without --preserve"
