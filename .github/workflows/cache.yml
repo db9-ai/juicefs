@@ -63,6 +63,16 @@ jobs:
         run: |
           sudo GOCOVERDIR=$(pwd)/cover .github/scripts/cache.sh
 
+      - name: Diagnose MinIO service
+        if: failure()
+        run: |
+          docker ps -a --filter name=minio
+          if docker container inspect minio >/dev/null 2>&1; then
+            docker inspect --format '{{json .State}}' minio
+            docker logs --tail 100 minio
+          fi
+          curl -v --max-time 10 http://127.0.0.1:9000/minio/health/ready || true
+
       - name: Check juicefs log
         if: always()
         run: |

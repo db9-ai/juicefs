@@ -518,7 +518,7 @@ prepare_test()
     rm -rf /var/jfs/myjfs || true
     rm -rf /var/jfsCache/myjfs || true
     [[ -x /usr/local/bin/mc ]] || bash .github/scripts/minio_fixture.sh mc /usr/local/bin/mc
-    mc alias set myminio http://localhost:9000 minioadmin minioadmin
+    mc alias set myminio http://127.0.0.1:9000 minioadmin minioadmin
     mc rm --force --recursive myminio/test || true
 }
 
