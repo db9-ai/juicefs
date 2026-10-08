@@ -159,7 +159,7 @@ jobs:
       - name: run mutate test
         # timeout-minutes: 120
         run: |
-          sudo chmod 777 /var/jfsCache
+          sudo install -d -m 0777 /var/jfsCache
           test_file=$(echo ${{matrix.test_file}} | awk -F'-' '{print $1}')
           job_index=$(echo ${{matrix.test_file}} | awk -F'-' '{print $2}')
           job_total=$(echo ${{matrix.test_file}} | awk -F'-' '{print $3}')
