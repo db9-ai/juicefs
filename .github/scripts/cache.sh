@@ -518,6 +518,10 @@ prepare_test()
     rm -rf /var/jfs/myjfs || true
     rm -rf /var/jfsCache/myjfs || true
     [[ -x /usr/local/bin/mc ]] || bash .github/scripts/minio_fixture.sh mc /usr/local/bin/mc
+    # Docker start returns before MinIO can accept requests after a restart.
+    curl --fail --silent --show-error --max-time 2 \
+        --retry 30 --retry-delay 1 --retry-all-errors \
+        http://127.0.0.1:9000/minio/health/ready
     mc alias set myminio http://127.0.0.1:9000 minioadmin minioadmin
     mc rm --force --recursive myminio/test || true
 }

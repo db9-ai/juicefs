@@ -10,7 +10,7 @@ test_clone_with_jfs_source()
     ./juicefs.exe format $META_URL myjfs
     ./juicefs.exe mount -d $META_URL z:
     ls /z
-    [[ ! -d /z/juicefs ]] && git clone https://github.com/juicedata/juicefs.git /z/juicefs --depth 1
+    [[ ! -d /z/juicefs ]] && git clone --verbose --progress https://github.com/juicedata/juicefs.git /z/juicefs --depth 1
     ls /z/juicefs
     do_clone true
     echo "test clone without --preserve"
