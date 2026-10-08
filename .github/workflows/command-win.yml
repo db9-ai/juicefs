@@ -206,6 +206,7 @@ jobs:
           META_URL=redis://127.0.0.1:6379/1 .github/scripts/command-win/acl.sh
 
       - name: Test clone
+        id: clone
         timeout-minutes: 10
         shell: bash
 #        if: false
@@ -214,6 +215,19 @@ jobs:
           export LANG=C.UTF-8
           export LC_ALL=C.UTF-8
           META_URL=redis://127.0.0.1:6379/1 .github/scripts/command-win/clone.sh
+
+      - name: Diagnose clone crash
+        if: failure() && steps.clone.outcome == 'failure'
+        shell: pwsh
+        run: |
+          Get-Command git | Format-List Source,Version
+          git version --build-options
+          Get-Process -Name git,juicefs -ErrorAction SilentlyContinue | Format-Table Id,Name,Path
+          Get-WinEvent -FilterHashtable @{
+            LogName = 'Application'
+            Id = 1000,1001
+            StartTime = (Get-Date).AddMinutes(-30)
+          } -ErrorAction SilentlyContinue | Select-Object TimeCreated,Id,ProviderName,Message | Format-List
 
       - name: Test fsck
         timeout-minutes: 10
