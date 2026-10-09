@@ -235,6 +235,12 @@ jobs:
         shell: bash
         run: bash .github/scripts/command-win/git-config-diagnostic.sh
 
+      - name: Capture Git clone stack
+        if: failure() && steps.clone.outcome == 'failure'
+        timeout-minutes: 5
+        shell: bash
+        run: bash .github/scripts/command-win/git-clone-stack.sh
+
       - name: Test fsck
         timeout-minutes: 10
         shell: bash
