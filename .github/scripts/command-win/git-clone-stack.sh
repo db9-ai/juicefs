@@ -14,7 +14,21 @@ debugger=/c/mingw64/bin/gdb.exe
 test -x "$git_binary"
 test -x "$debugger"
 directory=$(mktemp -d /z/git-clone-stack.XXXXXX)
-trap 'rm -rf -- "$directory"' EXIT
+cleanup() {
+    local status=$?
+    trap - EXIT
+    for attempt in 1 2 3; do
+        if rm -rf -- "$directory"; then
+            exit "$status"
+        fi
+        echo "Diagnostic directory cleanup attempt $attempt failed" >&2
+        sleep 1
+    done
+    echo "Diagnostic directory remains: $directory" >&2
+    if [ "$status" -eq 0 ]; then status=1; fi
+    exit "$status"
+}
+trap cleanup EXIT
 
 "$debugger" --version
 # Keep multi-word commands and the spaced Git path out of the native argv parser.
@@ -30,9 +44,17 @@ EOF
 # Print frames and loaded modules only; do not dump memory or local variables.
 cat >> "$commands" <<'EOF'
 run
-thread apply all bt
-info sharedlibrary
-x/12i $pc
+if !$_isvoid($_exitcode)
+  printf "Diagnostic Git exited with code %d; no live stack remains.\n", $_exitcode
+else
+  if !$_isvoid($_exitsignal)
+    printf "Diagnostic Git terminated with signal %d; no live stack remains.\n", $_exitsignal
+  else
+    thread apply all bt
+    info sharedlibrary
+    x/12i $pc
+  end
+end
 EOF
 MSYS2_ARG_CONV_EXCL='*' "$debugger" --batch --nx \
     --command="$(cygpath -m "$commands")"
