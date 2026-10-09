@@ -185,6 +185,15 @@ class SummaryTests(FileTests):
 
 
 class QuotaTests(FileTests):
+    def test_quota_empty_directory(self):
+        # Non-strict initialization is deterministic before there are any writes.
+        self.v.set_quota(path=TESTFN, capacity=1024*1024*1024, inodes=1000, create=True)
+        expected = {TESTFN: {"MaxSpace": 1024*1024*1024, "MaxInodes": 1000, "UsedSpace": 0, "UsedInodes": 0}}
+        self.assertEqual(normalize(self.v.get_quota(path=TESTFN)), normalize(expected))
+        self.assertEqual(normalize(self.v.list_quota()), normalize(expected))
+        self.v.del_quota(path=TESTFN)
+        self.assertEqual(self.v.get_quota(path=TESTFN), {})
+
     def test_quota(self):
         # /test/dir1/file
         #      /dir2
@@ -194,17 +203,17 @@ class QuotaTests(FileTests):
         self.create_file(TESTFN + '/dir1/file')
         self.v.mkdir(TESTFN + '/dir2')
 
-        # set quota
-        self.v.set_quota(path=TESTFN, capacity=1024*1024*1024, inodes=1000, create=True)
+        # Scan the populated tree instead of depending on asynchronous dir stats.
+        self.v.set_quota(path=TESTFN, capacity=1024*1024*1024, inodes=1000, create=True, strict=True)
         res = self.v.get_quota(path=TESTFN)
-        self.assertEqual(normalize(res), normalize({"/test": {"MaxSpace": 1024*1024*1024, "MaxInodes": 1000, "UsedSpace": 0, "UsedInodes": 3}}))
+        self.assertEqual(normalize(res), normalize({"/test": {"MaxSpace": 1024*1024*1024, "MaxInodes": 1000, "UsedSpace": 16384, "UsedInodes": 4}}))
 
         res = self.v.list_quota()
-        self.assertEqual(normalize(res), normalize({"/test": {"MaxSpace": 1024*1024*1024, "MaxInodes": 1000, "UsedSpace": 0, "UsedInodes": 3}}))
+        self.assertEqual(normalize(res), normalize({"/test": {"MaxSpace": 1024*1024*1024, "MaxInodes": 1000, "UsedSpace": 16384, "UsedInodes": 4}}))
 
         self.v.set_quota(path=TESTFN+"/dir1",  capacity=1024*1024*1024, inodes=10000, create=True, strict=True)
         res = self.v.list_quota()
-        self.assertEqual(normalize(res), normalize({"/test": {"MaxSpace": 1024*1024*1024, "MaxInodes": 1000, "UsedSpace": 0, "UsedInodes": 3}, "/test/dir1": {"MaxSpace": 1024*1024*1024, "MaxInodes": 10000, "UsedSpace": 4096, "UsedInodes": 1}}))
+        self.assertEqual(normalize(res), normalize({"/test": {"MaxSpace": 1024*1024*1024, "MaxInodes": 1000, "UsedSpace": 16384, "UsedInodes": 4}, "/test/dir1": {"MaxSpace": 1024*1024*1024, "MaxInodes": 10000, "UsedSpace": 4096, "UsedInodes": 1}}))
 
         # check quota
         self.v.check_quota(path=TESTFN, strict=True, repair=True)
