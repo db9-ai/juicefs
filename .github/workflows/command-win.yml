@@ -229,6 +229,12 @@ jobs:
             StartTime = (Get-Date).AddMinutes(-30)
           } -ErrorAction SilentlyContinue | Select-Object TimeCreated,Id,ProviderName,Message | Format-List
 
+      - name: Diagnose Git config writes
+        if: failure() && steps.clone.outcome == 'failure'
+        timeout-minutes: 2
+        shell: bash
+        run: bash .github/scripts/command-win/git-config-diagnostic.sh
+
       - name: Test fsck
         timeout-minutes: 10
         shell: bash
