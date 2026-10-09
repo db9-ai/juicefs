@@ -38,6 +38,11 @@ jobs:
         uses: actions/checkout@v3
         with:
           fetch-depth: 1
+      - name: Authenticate private Go dependencies
+        uses: ./.github/actions/private-go-auth
+        with:
+          client-id: ${{ vars.SYS9_INFRA_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SYS9_INFRA_APP_PRIVATE_KEY }}
 
       - name: Setup MSBuild.exe
         if: false
@@ -151,16 +156,17 @@ jobs:
           $env:PATH+=";C:\mingw64\bin"
           go build -ldflags="-s -w" -o juicefs.exe .
 
-      - name: Install Python3
-        run: |
-          choco install python3 -y
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       - name: Wins_fs_test
         run: |
           ./juicefs.exe format redis://127.0.0.1:6379/1 myjfs
           $env:PATH+=";C:\Program Files (x86)\WinFsp\bin"
           ./juicefs.exe mount -d redis://127.0.0.1:6379/1 z:
-          python3 .github/scripts/wins_fs_test.py
+          python .github/scripts/wins_fs_test.py
 
       - name: Test Gc
         timeout-minutes: 10
@@ -200,6 +206,7 @@ jobs:
           META_URL=redis://127.0.0.1:6379/1 .github/scripts/command-win/acl.sh
 
       - name: Test clone
+        id: clone
         timeout-minutes: 10
         shell: bash
 #        if: false
@@ -208,6 +215,31 @@ jobs:
           export LANG=C.UTF-8
           export LC_ALL=C.UTF-8
           META_URL=redis://127.0.0.1:6379/1 .github/scripts/command-win/clone.sh
+
+      - name: Diagnose clone crash
+        if: failure() && steps.clone.outcome == 'failure'
+        shell: pwsh
+        run: |
+          Get-Command git | Format-List Source,Version
+          git version --build-options
+          Get-Process -Name git,juicefs -ErrorAction SilentlyContinue | Format-Table Id,Name,Path
+          Get-WinEvent -FilterHashtable @{
+            LogName = 'Application'
+            Id = 1000,1001
+            StartTime = (Get-Date).AddMinutes(-30)
+          } -ErrorAction SilentlyContinue | Select-Object TimeCreated,Id,ProviderName,Message | Format-List
+
+      - name: Diagnose Git config writes
+        if: failure() && steps.clone.outcome == 'failure'
+        timeout-minutes: 2
+        shell: bash
+        run: bash .github/scripts/command-win/git-config-diagnostic.sh
+
+      - name: Capture Git clone stack
+        if: failure() && steps.clone.outcome == 'failure'
+        timeout-minutes: 5
+        shell: bash
+        run: bash .github/scripts/command-win/git-clone-stack.sh
 
       - name: Test fsck
         timeout-minutes: 10

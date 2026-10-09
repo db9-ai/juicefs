@@ -1,0 +1,37 @@
+name: Authenticate private Go dependencies
+description: Read the PD and TiKV client forks with a short-lived GitHub App token
+inputs:
+  client-id:
+    description: GitHub App client ID
+    required: true
+  private-key:
+    description: GitHub App private key
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Create dependency read token
+      id: token
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      with:
+        client-id: ${{ inputs.client-id }}
+        private-key: ${{ inputs.private-key }}
+        owner: db9-ai
+        repositories: |
+          pd
+          client-go
+        permission-contents: read
+    - name: Configure private Go downloads
+      shell: bash
+      env:
+        DEPENDENCY_TOKEN: ${{ steps.token.outputs.token }}
+      run: |
+        set -euo pipefail
+        echo 'GOPRIVATE=github.com/db9-ai/*' >> "$GITHUB_ENV"
+        echo "GO_DEPENDENCY_TOKEN=$DEPENDENCY_TOKEN" >> "$GITHUB_ENV"
+        cat >> "$GITHUB_ENV" <<'ENV'
+        GIT_CONFIG_COUNT=1
+        GIT_CONFIG_KEY_0=credential.https://github.com.helper
+        GIT_CONFIG_VALUE_0=
+        GIT_CONFIG_PARAMETERS='credential.https://github.com.helper=!f() { if [ "$1" = get ]; then echo username=x-access-token; echo "password=$GO_DEPENDENCY_TOKEN"; fi; }; f'
+        ENV

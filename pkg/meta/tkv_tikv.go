@@ -43,6 +43,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnutil"
 	pdopt "github.com/tikv/pd/client/opt"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func init() {
@@ -65,7 +66,10 @@ func newTikvClient(addr string) (tkvClient, error) {
 	default:
 		plvl = "dpanic"
 	}
-	l, prop, _ := plog.InitLogger(&plog.Config{Level: plvl}, zap.Fields(zap.String("component", "tikv"), zap.Int("pid", os.Getpid())))
+	// Keep client diagnostics out of machine-readable CLI output such as status.
+	output := zapcore.Lock(zapcore.AddSync(os.Stderr))
+	l, prop, _ := plog.InitLoggerWithWriteSyncer(&plog.Config{Level: plvl}, output, output,
+		zap.Fields(zap.String("component", "tikv"), zap.Int("pid", os.Getpid())))
 	plog.ReplaceGlobals(l, prop)
 
 	tUrl, err := url.Parse("tikv://" + addr)

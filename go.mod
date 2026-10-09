@@ -20,7 +20,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.72.3
 	github.com/aws/smithy-go v1.22.2
 	github.com/baidubce/bce-sdk-go v0.9.263
-	github.com/bytedance/mockey v1.2.14
+	github.com/bytedance/mockey v1.4.5
 	github.com/ceph/go-ceph v0.18.0
 	github.com/charlievieth/fastwalk v1.0.14
 	github.com/cloudsoda/go-smb2 v0.0.0-20250228001242-d4c70e6251cc
@@ -361,3 +361,7 @@ replace github.com/mattn/go-colorable v0.0.9 => github.com/juicedata/go-colorabl
 replace github.com/cloudsoda/go-smb2 => github.com/juicedata/go-smb2 v0.0.0-20260310064141-58f27d06634e
 
 replace github.com/hashicorp/golang-lru/v2 v2.0.7 => github.com/juicedata/golang-lru/v2 v2.0.8-0.20251126062551-1b321869f904
+
+replace github.com/tikv/pd/client => github.com/db9-ai/pd/client v0.0.0-20261008163709-9adc0789ac45
+
+replace github.com/tikv/client-go/v2 => github.com/db9-ai/client-go/v2 v2.0.0-20261008164325-ca07349f6de5

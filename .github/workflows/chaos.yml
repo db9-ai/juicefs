@@ -38,6 +38,11 @@ jobs:
         uses: actions/checkout@v3
         with:
           fetch-depth: 1
+      - name: Authenticate private Go dependencies
+        uses: ./.github/actions/private-go-auth
+        with:
+          client-id: ${{ vars.SYS9_INFRA_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SYS9_INFRA_APP_PRIVATE_KEY }}
 
       - uses: actions/setup-go@v3
         with:
@@ -96,6 +101,8 @@ jobs:
       - name: Deploy minio
         run: |
           rm -rf /data/minio-data/*
+          bash .github/scripts/minio_fixture.sh image
+          kind load docker-image juicefs-ci-minio:RELEASE.2022-01-25T19-56-04Z --name chart-testing
           kubectl apply -f .github/scripts/chaos/minio.yaml
 
       - name: Mount Juicefs 

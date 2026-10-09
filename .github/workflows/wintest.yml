@@ -42,6 +42,11 @@ jobs:
         uses: actions/checkout@v3
         with:
           fetch-depth: 1
+      - name: Authenticate private Go dependencies
+        uses: ./.github/actions/private-go-auth
+        with:
+          client-id: ${{ vars.SYS9_INFRA_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SYS9_INFRA_APP_PRIVATE_KEY }}
 
       - name: Setup MSBuild.exe
         if: false
@@ -55,9 +60,8 @@ jobs:
 
       - name: Download WinFsp
         run: |
-          choco install wget
           mkdir "C:\wfsp\"
-          wget -O winfsp.msi https://github.com/winfsp/winfsp/releases/download/v2.0/winfsp-2.0.23075.msi
+          Invoke-WebRequest -Uri https://github.com/winfsp/winfsp/releases/download/v2.0/winfsp-2.0.23075.msi -OutFile winfsp.msi
           copy winfsp.msi "C:\wfsp\"
           choco install 7zip -y
 
@@ -103,7 +107,7 @@ jobs:
 
       - name: Download winsw
         run: |
-          wget https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe -q --show-progress -O winsw.exe
+          Invoke-WebRequest -Uri https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe -OutFile winsw.exe
           ls winsw.exe
 
       - name: Start Redis
@@ -130,7 +134,7 @@ jobs:
 
       - name: Download MinGW
         run: |
-          wget https://github.com/niXman/mingw-builds-binaries/releases/download/14.2.0-rt_v12-rev1/x86_64-14.2.0-release-win32-seh-msvcrt-rt_v12-rev1.7z -q --show-progress -O mingw.7z
+          Invoke-WebRequest -Uri https://github.com/niXman/mingw-builds-binaries/releases/download/14.2.0-rt_v12-rev1/x86_64-14.2.0-release-win32-seh-msvcrt-rt_v12-rev1.7z -OutFile mingw.7z
           7z.exe x mingw.7z -oC:\mingw64
           ls C:\mingw64\bin
 
@@ -156,14 +160,14 @@ jobs:
 
       - name: Run Winfsp Tests
         run: |
-          wget https://github.com/juicedata/winfsp/releases/download/testing_suit_20250324/winfsp-tests-x64.exe -q --show-progress -O "C:\Program Files (x86)\WinFsp\bin\winfsp-tests-x64.exe"
+          Invoke-WebRequest -Uri https://github.com/juicedata/winfsp/releases/download/testing_suit_20250324/winfsp-tests-x64.exe -OutFile "C:\Program Files (x86)\WinFsp\bin\winfsp-tests-x64.exe"
           ls "C:\Program Files (x86)\WinFsp\bin\winfsp-tests-x64.exe"
           cd Z:
           & "C:\Program Files (x86)\WinFsp\bin\winfsp-tests-x64.exe" --fuse-external --resilient --case-insensitive-cmp
       
       - name: Run winfstest
         run: |
-          wget https://github.com/juicedata/winfstest/releases/download/testing_20250313/TestSuite-x64-v4.zip -q --show-progress -O Z:\TestSuite-x64.zip
+          Invoke-WebRequest -Uri https://github.com/juicedata/winfstest/releases/download/testing_20250313/TestSuite-x64-v4.zip -OutFile Z:\TestSuite-x64.zip
           ls Z:\TestSuite-x64.zip
           cd Z:\
           Expand-Archive -Path .\TestSuite-x64.zip -DestinationPath .\TestSuite
@@ -174,7 +178,7 @@ jobs:
       - name: Run FSX Test
         run: |
           cd Z:\
-          wget https://github.com/chenjie4255/fstools/releases/download/v0.0.1/fsx-x64.exe -q --show-progress -O fsx.exe
+          Invoke-WebRequest -Uri https://github.com/chenjie4255/fstools/releases/download/v0.0.1/fsx-x64.exe -OutFile fsx.exe
           ls fsx.exe
           ./fsx.exe -d 180 -p 10000 -F 100000 fsxtest
 
