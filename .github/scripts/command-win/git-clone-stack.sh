@@ -17,17 +17,22 @@ directory=$(mktemp -d /z/git-clone-stack.XXXXXX)
 trap 'rm -rf -- "$directory"' EXIT
 
 "$debugger" --version
+# Keep multi-word commands and the spaced Git path out of the native argv parser.
+# GDB parses the quoted, forward-slash paths inside this command file itself.
+commands="$directory/commands.gdb"
+cat > "$commands" <<EOF
+set auto-load off
+set pagination off
+handle SIGSEGV stop print nopass
+file "$(cygpath -m "$git_binary")"
+set args -c credential.helper= -c http.extraHeader= clone --verbose --progress --no-checkout https://github.com/juicedata/juicefs.git "$(cygpath -m "$directory/repo")" --depth 1
+EOF
 # Print frames and loaded modules only; do not dump memory or local variables.
-"$debugger" --batch --nx \
-    -iex 'set auto-load off' \
-    -ex 'set pagination off' \
-    -ex 'handle SIGSEGV stop print nopass' \
-    -ex run \
-    -ex 'thread apply all bt' \
-    -ex 'info sharedlibrary' \
-    -ex 'x/12i $pc' \
-    --args "$(cygpath -w "$git_binary")" \
-    -c credential.helper= -c http.extraHeader= \
-    clone --verbose --progress --no-checkout \
-    https://github.com/juicedata/juicefs.git \
-    "$(cygpath -w "$directory/repo")" --depth 1
+cat >> "$commands" <<'EOF'
+run
+thread apply all bt
+info sharedlibrary
+x/12i $pc
+EOF
+MSYS2_ARG_CONV_EXCL='*' "$debugger" --batch --nx \
+    --command="$(cygpath -m "$commands")"
