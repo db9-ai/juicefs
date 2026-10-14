@@ -403,7 +403,9 @@ func TestCacheManager(t *testing.T) {
 		}).Build()
 		var wg sync.WaitGroup
 		wg.Add(1)
+		cleanupDone := make(chan struct{})
 		go func() {
+			defer close(cleanupDone)
 			s1.Lock()
 			wg.Done()
 			s1.cleanupFull()
@@ -414,6 +416,9 @@ func TestCacheManager(t *testing.T) {
 		start := time.Now()
 		s1.load(k1)
 		So(time.Since(start), ShouldBeLessThan, time.Second*3)
+		// Finish the mocked cleanup before unpatching or shutting down stores.
+		// Removing a store waits for its workers, including this cleanup.
+		<-cleanupDone
 	})
 
 	m.Lock()
