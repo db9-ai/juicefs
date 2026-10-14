@@ -1,4 +1,5 @@
 name: "command-win"
+# CI baseline probe (no behavior change).
 
 on:
   push:

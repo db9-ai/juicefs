@@ -1,4 +1,5 @@
 name: "command-test"
+# CI baseline probe (no behavior change).
 
 on:
   push:

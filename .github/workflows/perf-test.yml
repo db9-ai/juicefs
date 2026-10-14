@@ -1,4 +1,5 @@
 name: "JuiceFS mdtest Performance Comparison"
+# CI baseline probe (no behavior change).
 
 on:
   push:

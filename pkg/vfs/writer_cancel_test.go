@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+// CI baseline probe (no behavior change).
+
 package vfs
 
 import (
