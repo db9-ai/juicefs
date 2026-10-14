@@ -261,9 +261,20 @@ func TestClosedDataWriterOpenCloseDoesNotRemoveTrackedWriter(t *testing.T) {
 	}
 }
 
+// flushWaitTestStore models buffers owned by this store so unrelated global
+// allocations cannot divert flush-wait tests into buffer throttling.
+type flushWaitTestStore struct {
+	cancelTestStore
+}
+
+func (*flushWaitTestStore) UsedMemory() int64 { return utils.AllocMemory() }
+
 func TestFileWriterWriteFailsWhenDataWriterClosesWhileWaitingForFlush(t *testing.T) {
+	// Account for buffers retained by other tests in this process.
+	buffer := utils.Alloc(4 << 20)
+	defer utils.Free(buffer)
 	w := &dataWriter{
-		store:      &cancelTestStore{},
+		store:      &flushWaitTestStore{},
 		done:       make(chan struct{}),
 		files:      make(map[Ino]*fileWriter),
 		blockSize:  1 << 20,
@@ -318,8 +329,10 @@ func TestFileWriterWriteFailsWhenDataWriterClosesWhileWaitingForFlush(t *testing
 }
 
 func TestFileWriterWriteFailsWhenDataWriterClosesBeforeFlushWaitEnds(t *testing.T) {
+	buffer := utils.Alloc(4 << 20)
+	defer utils.Free(buffer)
 	w := &dataWriter{
-		store:      &cancelTestStore{},
+		store:      &flushWaitTestStore{},
 		done:       make(chan struct{}),
 		files:      make(map[Ino]*fileWriter),
 		blockSize:  1 << 20,

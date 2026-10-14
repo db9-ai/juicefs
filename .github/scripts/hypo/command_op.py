@@ -52,14 +52,8 @@ class CommandOperation:
         
     def run_cmd(self, command:str, stderr=subprocess.STDOUT) -> str:
         self.logger.info(f'run_cmd: {command}')
-        if '|' in command or '>' in command or '&' in command:
-            ret=os.system(command)
-            if ret == 0:
-                return ret
-            else: 
-                raise Exception(f"run command {command} failed with {ret}")
         try:
-            output = subprocess.run(command.split(), check=True, stdout=subprocess.PIPE, stderr=stderr)
+            output = subprocess.run(shlex.split(command), check=True, stdout=subprocess.PIPE, stderr=stderr)
         except subprocess.CalledProcessError as e:
             raise e
         return output.stdout.decode()
@@ -153,7 +147,7 @@ class CommandOperation:
     
     def do_status(self):
         try:
-            result = self.run_cmd(f'./juicefs status {self.meta_url} --log-level error', stderr=subprocess.DEVNULL)
+            result = self.run_cmd(f'./juicefs status {shlex.quote(self.meta_url)} --log-level error', stderr=subprocess.DEVNULL)
             result = json.loads(result)['Setting']
         except subprocess.CalledProcessError as e:
             return self.handleException(e, 'do_status', '')
@@ -180,7 +174,7 @@ class CommandOperation:
         return self.clean_dump(result)
 
     def get_dump_cmd(self, meta_url, subdir, fast, skip_trash, keep_secret_key, threads, user='root'):
-        cmd = f'sudo -u {user} ./juicefs dump --log-level error {meta_url} '
+        cmd = f'sudo -u {user} ./juicefs dump --log-level error {shlex.quote(meta_url)} '
         cmd += f' --subdir /{subdir}' if subdir != '' else ''
         cmd += f' --fast' if fast else ''
         cmd += f' --skip-trash' if skip_trash else ''
@@ -241,7 +235,7 @@ class CommandOperation:
 
     def do_gc(self, compact:bool,  delete:bool, user:str='root'):
         try:
-            cmd = f'sudo -u {user} ./juicefs gc --log-level error {self.meta_url}'
+            cmd = f'sudo -u {user} ./juicefs gc --log-level error {shlex.quote(self.meta_url)}'
             if compact:
                 cmd += ' --compact'
             if delete:
@@ -270,7 +264,7 @@ class CommandOperation:
     def do_fsck(self, entry, repair=False, recuisive=False, user='root'):
         abspath = os.path.join(self.root_dir, entry)
         try:
-            cmd = f'sudo -u {user} ./juicefs fsck --log-level error {self.meta_url} --path {abspath}'
+            cmd = f'sudo -u {user} ./juicefs fsck --log-level error {shlex.quote(self.meta_url)} --path {abspath}'
             if repair:
                 cmd += ' --repair'
             if recuisive:
@@ -341,7 +335,7 @@ class CommandOperation:
     
     def do_config(self, capacity, inodes, trash_days, enable_acl, encrypt_secret, force, yes, user):
         try:
-            cmd = f'sudo -u {user} ./juicefs config {self.meta_url} --capacity {capacity} --inodes {inodes} --trash-days {trash_days} --enable-acl {enable_acl} --encrypt-secret {encrypt_secret}'
+            cmd = f'sudo -u {user} ./juicefs config {shlex.quote(self.meta_url)} --capacity {capacity} --inodes {inodes} --trash-days {trash_days} --enable-acl={str(enable_acl).lower()} --encrypt-secret={str(encrypt_secret).lower()}'
             if force:
                 cmd += ' --force'
             if yes:

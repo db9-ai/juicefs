@@ -1,3 +1,5 @@
+include ../../.github/private-go-auth.mk
+
 LDFLAGS = -s -w
 
 .PHONY: libjfs.so juicefs
@@ -41,7 +43,7 @@ juicefs:
 	echo "Building juicefs version $(VERSION).$(BUILD_DATE_SHORT)"
 	sed -i 's/^VERSION = .*/VERSION = "$(VERSION).$(BUILD_DATE_SHORT)"/' juicefs/setup.py
 	sed -i 's/^BUILD_INFO = .*/BUILD_INFO = "$(BUILD_DATE) $(REVISION)"/' juicefs/setup.py
-	docker run --rm -i -v ${PWD}/../../:/opt/jfs -w /opt/jfs/sdk/python -e GOPROXY=${GOPROXY} sdkbuilder sh -c 'make libjfs.so && cd juicefs && python3 -m build -w'
+	docker run $(PRIVATE_GO_DOCKER_ENV) --rm -i -v ${PWD}/../../:/opt/jfs -w /opt/jfs/sdk/python -e GOPROXY=${GOPROXY} sdkbuilder sh -c 'make libjfs.so && cd juicefs && python3 -m build -w'
 
 clean:
     $(clean)

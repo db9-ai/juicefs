@@ -43,6 +43,7 @@ class JuicefsDataMachine(RuleBasedStateMachine):
 
     def __init__(self):
         super(JuicefsDataMachine, self).__init__()
+        self.current_fd = None
         print(f'__init__')
 
     def equal(self, result1, result2):
@@ -83,7 +84,18 @@ class JuicefsDataMachine(RuleBasedStateMachine):
         f1, _ = self.fsop1.do_open(file=self.FILE_NAME, mode='w+', encoding='utf8', errors='strict')
         f2, _ = self.fsop2.do_open(file=self.FILE_NAME, mode='w+', encoding='utf8', errors='strict')
         assert f1 is not None and f2 is not None, red(f'init_folders:\nf1 is {f1}\nf2 is {f2}')
-        return (self.FILE_NAME, f1, f2)
+        self.current_fd = (self.FILE_NAME, f1, f2)
+        return self.current_fd
+
+    @rule(target=fds)
+    @precondition(lambda self: self.current_fd is None)
+    def reopen(self):
+        f1, result1 = self.fsop1.do_open(file=self.FILE_NAME, mode='r+', encoding='utf8', errors='strict')
+        f2, result2 = self.fsop2.do_open(file=self.FILE_NAME, mode='r+', encoding='utf8', errors='strict')
+        assert self.equal(result1, result2), red(f'reopen:\nresult1 is {result1}\nresult2 is {result2}')
+        assert f1 is not None and f2 is not None, red(f'reopen:\nf1 is {f1}\nf2 is {f2}')
+        self.current_fd = (self.FILE_NAME, f1, f2)
+        return self.current_fd
 
     
     @rule( fd = fds.filter(lambda x: x != multiple()), 
@@ -141,6 +153,7 @@ class JuicefsDataMachine(RuleBasedStateMachine):
         if isinstance(result1, Exception):
             return fd
         else:
+            self.current_fd = None
             return multiple()
     @rule(fd = fds.filter(lambda x: x != multiple()))
     @precondition(lambda self: self.should_run('flush_and_fsync'))
@@ -197,7 +210,13 @@ class JuicefsDataMachine(RuleBasedStateMachine):
         assert self.equal(result1, result2), red(f'copy_file_range:\nresult1 is {result1}\nresult2 is {result2}')
 
     def teardown(self):
-        pass
+        if self.current_fd is not None:
+            fd = self.current_fd
+            try:
+                self.fsop1.do_close(fd=fd[1], file=fd[0])
+            finally:
+                self.fsop2.do_close(fd=fd[2], file=fd[0])
+                self.current_fd = None
         
 if __name__ == '__main__':
     MAX_EXAMPLE=int(os.environ.get('MAX_EXAMPLE', '100'))

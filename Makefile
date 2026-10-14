@@ -1,3 +1,5 @@
+include .github/private-go-auth.mk
+
 export GO111MODULE=on
 
 all: juicefs
@@ -85,7 +87,7 @@ _juicefs.exe:
 
 .PHONY: snapshot release debug test
 snapshot:
-	docker run --rm --privileged \
+	docker run $(PRIVATE_GO_DOCKER_ENV) --rm --privileged \
 		-e REVISIONDATE=$(REVISIONDATE) \
 		-e PRIVATE_KEY=${PRIVATE_KEY} \
 		-v ~/go/pkg/mod:/go/pkg/mod \
@@ -95,7 +97,7 @@ snapshot:
 		juicedata/golang-cross:latest release --snapshot --rm-dist --skip-publish
 
 release:
-	docker run --rm --privileged \
+	docker run $(PRIVATE_GO_DOCKER_ENV) --rm --privileged \
 		-e REVISIONDATE=$(REVISIONDATE) \
 		-e PRIVATE_KEY=${PRIVATE_KEY} \
 		--env-file .release-env \
@@ -118,7 +120,7 @@ test.pkg:
 	go test -tags gluster -v -cover -count=1  -failfast -timeout=12m $$(go list ./pkg/... | grep -v /meta) -args -test.gocoverdir="$(shell realpath cover/)"
 
 test.cmd:
-	sudo JFS_GC_SKIPPEDTIME=1 MINIO_ACCESS_KEY=testUser MINIO_SECRET_KEY=testUserPassword GOMAXPROCS=8 go test -v -count=1 -failfast -cover -timeout=8m ./cmd/... -coverpkg=./pkg/...,./cmd/... -args -test.gocoverdir="$(shell realpath cover/)"
+	sudo $(PRIVATE_GO_SUDO_ENV) JFS_GC_SKIPPEDTIME=1 MINIO_ACCESS_KEY=testUser MINIO_SECRET_KEY=testUserPassword GOMAXPROCS=8 go test -v -count=1 -failfast -cover -timeout=8m ./cmd/... -coverpkg=./pkg/...,./cmd/... -args -test.gocoverdir="$(shell realpath cover/)"
 
 test.fdb:
 	go test -v -cover -count=1  -failfast -timeout=4m ./pkg/meta/ -tags fdb -run=TestFdb -args -test.gocoverdir="$(shell realpath cover/)"

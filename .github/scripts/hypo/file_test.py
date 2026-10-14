@@ -2,6 +2,21 @@ import unittest
 from file import JuicefsDataMachine
 
 class TestPySdk(unittest.TestCase):
+    def test_reopen_after_close(self):
+        state = JuicefsDataMachine()
+        try:
+            fd = state.init_folders()
+            state.write(fd=fd, content='persisted')
+            state.close(fd=fd)
+            self.assertIsNone(state.current_fd)
+            fd = state.reopen()
+            self.assertEqual(fd[1].read(9), 'persisted')
+            self.assertEqual(fd[2].read(9), 'persisted')
+            state.close(fd=fd)
+            state.reopen()
+        finally:
+            state.teardown()
+
     def test_issue_1522_1(self):
         # SEE https://github.com/juicedata/jfs/issues/1522
         state = JuicefsDataMachine()

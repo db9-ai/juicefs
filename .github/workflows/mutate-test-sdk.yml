@@ -34,6 +34,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+      - name: Authenticate private Go dependencies
+        uses: ./.github/actions/private-go-auth
+        with:
+          client-id: ${{ vars.SYS9_INFRA_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SYS9_INFRA_APP_PRIVATE_KEY }}
       - name: Build
         uses: ./.github/actions/build
 

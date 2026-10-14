@@ -10,7 +10,16 @@ test_clone_with_jfs_source()
     ./juicefs.exe format $META_URL myjfs
     ./juicefs.exe mount -d $META_URL z:
     ls /z
-    [[ ! -d /z/juicefs ]] && git clone https://github.com/juicedata/juicefs.git /z/juicefs --depth 1
+    if [[ ! -d /z/juicefs ]]; then
+        echo "Downloading the clone fixture"
+        # This public fixture needs no dependency credentials. Keep them out of traces.
+        env -u GO_DEPENDENCY_TOKEN -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_COUNT \
+            GIT_TRACE2_EVENT=1 GIT_TRACE_REFS=1 GIT_TRACE2_ENV_VARS= GIT_TRACE2_CONFIG_PARAMS= \
+            GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c http.extraHeader= \
+            clone --verbose --progress --no-checkout https://github.com/juicedata/juicefs.git /z/juicefs --depth 1
+        echo "Checking out the clone fixture"
+        GIT_TRACE2_EVENT=1 git -C /z/juicefs checkout --force HEAD
+    fi
     ls /z/juicefs
     do_clone true
     echo "test clone without --preserve"

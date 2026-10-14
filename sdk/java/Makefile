@@ -1,3 +1,5 @@
+include ../../.github/private-go-auth.mk
+
 GOROOT=$(shell go env GOROOT)
 
 all: package
@@ -27,7 +29,7 @@ package-all: libjfs-all
 	mvn clean package -B -Dmaven.test.skip=true
 
 libjfs-all: libjfs.so
-	docker run --rm \
+	docker run $(PRIVATE_GO_DOCKER_ENV) --rm \
 		-v ~/go/pkg/mod:/go/pkg/mod \
 		-v ~/work/juicefs/juicefs:/go/src/github.com/juicedata/juicefs \
 		-v /var/run/docker.sock:/var/run/docker.sock \
@@ -37,7 +39,7 @@ libjfs-all: libjfs.so
 		-c 'make mac win linux-arm64 mac-arm64'
 
 libjfs.so:
-	docker run --rm \
+	docker run $(PRIVATE_GO_DOCKER_ENV) --rm \
 		-v ~/go/pkg/mod:/go/pkg/mod \
 		-v $(GOROOT):/go \
         -v ~/work/juicefs/juicefs:/go/src/github.com/juicedata/juicefs \

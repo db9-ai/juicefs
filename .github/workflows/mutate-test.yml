@@ -40,7 +40,7 @@ jobs:
 
       - name: install go-mutesting
         run: |
-          go install github.com/zimmski/go-mutesting/cmd/go-mutesting@latest
+          bash .github/scripts/mutate/install_mutator.sh
 
       - id: set-matrix
         run: |
@@ -66,7 +66,8 @@ jobs:
               TEST_FILE_NAME="$test_file_name" BLACK_LIST_FILE=$black_list_file python3 .github/scripts/mutate/parse_black_list.py 
               echo "black list checksum: "
               cat $black_list_file
-              total_count=$(go-mutesting $source_file_name --debug --no-exec --blacklist $black_list_file| grep "Save mutation into" | wc -l)
+              go-mutesting "$source_file_name" --debug --no-exec --blacklist "$black_list_file" > mutation-count.log
+              total_count=$(awk '/Save mutation into/ {count++} END {print count+0}' mutation-count.log)
               echo "total_count is $total_count"
               job_total=$(TEST_FILE_NAME=$test_file_name python3 .github/scripts/mutate/parse_job_total.py)
               echo "job_total specified: $job_total"
@@ -118,6 +119,11 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v3
+      - name: Authenticate private Go dependencies
+        uses: ./.github/actions/private-go-auth
+        with:
+          client-id: ${{ vars.SYS9_INFRA_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SYS9_INFRA_APP_PRIVATE_KEY }}
 
       - name: Get Current Job Log URL
         uses: Tiryoh/gha-jobid-action@v0
@@ -137,15 +143,16 @@ jobs:
 
       - name: Install Packages
         run: |
-          go install github.com/zimmski/go-mutesting/cmd/go-mutesting@latest
+          bash .github/scripts/mutate/install_mutator.sh
           sudo .github/scripts/apt_install.sh g++-multilib redis-server libacl1-dev attr python3-tk
           sudo pip install mysqlclient
-          apt -y install glusterfs-server
+          sudo apt-get install -y glusterfs-server
 
       - name: Prepare Database
         timeout-minutes: 10
         run: |
-          docker run -d -p 9000:9000 -p 9001:9001 -e "MINIO_ROOT_USER=testUser" -e "MINIO_ROOT_PASSWORD=testUserPassword" quay.io/minio/minio:RELEASE.2022-01-25T19-56-04Z server /data --console-address ":9001"
+          bash .github/scripts/minio_fixture.sh image
+          docker run -d -p 9000:9000 -p 9001:9001 -e "MINIO_ROOT_USER=testUser" -e "MINIO_ROOT_PASSWORD=testUserPassword" juicefs-ci-minio:RELEASE.2022-01-25T19-56-04Z server /data --console-address ":9001"
           go install github.com/minio/mc@RELEASE.2022-01-07T06-01-38Z && mc alias set local http://127.0.0.1:9000 testUser testUserPassword && mc mb local/testbucket
           make
           # sudo make -C fstests setup
@@ -153,7 +160,7 @@ jobs:
       - name: run mutate test
         # timeout-minutes: 120
         run: |
-          sudo chmod 777 /var/jfsCache
+          sudo install -d -m 0777 /var/jfsCache
           test_file=$(echo ${{matrix.test_file}} | awk -F'-' '{print $1}')
           job_index=$(echo ${{matrix.test_file}} | awk -F'-' '{print $2}')
           job_total=$(echo ${{matrix.test_file}} | awk -F'-' '{print $3}')
@@ -177,7 +184,7 @@ jobs:
           if [[ "$test_file" =~ ^pkg/.* ]]; then
             go test ./$package_path/...  -v -run "$test_cases" -count=1 -cover -timeout=5m -coverpkg=./$package_path/... -coverprofile=mutest-cov.out
           elif [[ "$test_file" =~ ^cmd/.* ]]; then
-            sudo JFS_GC_SKIPPEDTIME=1 MINIO_ACCESS_KEY=testUser MINIO_SECRET_KEY=testUserPassword go test ./cmd/... -v -run "$test_cases" -count=1 -cover -timeout=5m -coverpkg=./pkg/...,./cmd/... -coverprofile=mutest-cov.out 
+            sudo --preserve-env=GOPRIVATE,GO_DEPENDENCY_TOKEN,GIT_CONFIG_PARAMETERS,GIT_CONFIG_COUNT,GIT_CONFIG_KEY_0,GIT_CONFIG_VALUE_0 JFS_GC_SKIPPEDTIME=1 MINIO_ACCESS_KEY=testUser MINIO_SECRET_KEY=testUserPassword go test ./cmd/... -v -run "$test_cases" -count=1 -cover -timeout=5m -coverpkg=./pkg/...,./cmd/... -coverprofile=mutest-cov.out
           else
             echo "test file location error: $test_file"
             exit 0
@@ -188,7 +195,8 @@ jobs:
           echo "black list checksum: "
           cat $black_list_file
 
-          go-mutesting $source_file --debug --no-exec --do-not-remove-tmp-folder  --blacklist $black_list_file | tee -a mutate.log
+          go-mutesting "$source_file" --debug --no-exec --do-not-remove-tmp-folder --blacklist "$black_list_file" > mutate.log
+          cat mutate.log
           mutation_dir=$(cat mutate.log | grep "Save mutations into" | awk -F' ' '{print $4}' | sed -e 's:"::g')
           echo "mutation dir is $mutation_dir"
           JOB_INDEX=$job_index JOB_TOTAL=$job_total MUTATE_ORIGINAL=$source_file MUTATION_DIR=$mutation_dir COVERAGE_FILE=mutest-cov.out TEST_FILE_NAME="$test_file" PACKAGE_PATH="$package_path" STAT_RESULT_FILE=stat_result.log python3 .github/scripts/mutate/mutesting.py

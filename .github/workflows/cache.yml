@@ -28,6 +28,11 @@ jobs:
         uses: actions/checkout@v3
         with:
           fetch-depth: 1
+      - name: Authenticate private Go dependencies
+        uses: ./.github/actions/private-go-auth
+        with:
+          client-id: ${{ vars.SYS9_INFRA_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SYS9_INFRA_APP_PRIVATE_KEY }}
 
       - name: Remove unused software
         timeout-minutes: 3
@@ -57,6 +62,16 @@ jobs:
       - name: Test
         run: |
           sudo GOCOVERDIR=$(pwd)/cover .github/scripts/cache.sh
+
+      - name: Diagnose MinIO service
+        if: failure()
+        run: |
+          docker ps -a --filter name=minio
+          if docker container inspect minio >/dev/null 2>&1; then
+            docker inspect --format '{{json .State}}' minio
+            docker logs --tail 100 minio
+          fi
+          curl -v --max-time 10 http://127.0.0.1:9000/minio/health/ready || true
 
       - name: Check juicefs log
         if: always()

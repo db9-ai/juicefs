@@ -18,7 +18,8 @@ spec:
     spec:
       containers:
       - name: minio
-        image: minio/minio
+        image: juicefs-ci-minio:RELEASE.2022-01-25T19-56-04Z
+        imagePullPolicy: IfNotPresent
         resources:
           limits:
             memory: "500Mi"

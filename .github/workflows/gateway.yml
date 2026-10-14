@@ -72,6 +72,11 @@ jobs:
         uses: actions/checkout@v3
         with:
           fetch-depth: 1
+      - name: Authenticate private Go dependencies
+        uses: ./.github/actions/private-go-auth
+        with:
+          client-id: ${{ vars.SYS9_INFRA_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SYS9_INFRA_APP_PRIVATE_KEY }}
       
       - name: Set Variable
         id: vars
@@ -97,7 +102,7 @@ jobs:
 
       - name: Install tools
         run: | 
-          wget -q https://dl.minio.io/client/mc/release/linux-amd64/mc
+          bash .github/scripts/minio_fixture.sh mc ./mc
           chmod +x mc 
         shell: bash
         
