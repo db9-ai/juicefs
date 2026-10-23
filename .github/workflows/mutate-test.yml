@@ -227,6 +227,9 @@ jobs:
 
   success-all-test:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      pull-requests: write
     needs: [build-matrix, mutate-test]
     if: always() && !github.event.pull_request.draft
     steps:

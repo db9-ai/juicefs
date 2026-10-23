@@ -51,11 +51,11 @@ install_etcd() {
 }
 
 install_keydb() {
-    echo "deb https://download.keydb.dev/open-source-dist $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/keydb.list
-    sudo wget -O /etc/apt/trusted.gpg.d/keydb.gpg https://download.keydb.dev/open-source-dist/keyring.gpg
-    sudo .github/scripts/apt_install.sh keydb
-    keydb-server --storage-provider flash /tmp/ --port 6378 --bind 127.0.0.1 --daemonize yes
-    keydb-server --port 6377 --bind 127.0.0.1 --daemonize yes
+    sudo .github/scripts/apt_install.sh build-essential pkg-config libssl-dev libcurl4-openssl-dev uuid-dev libbz2-dev libzstd-dev liblz4-dev libsnappy-dev
+    mkdir -p /tmp/keydb-fixture
+    bash .github/scripts/keydb_fixture.sh /tmp/keydb-fixture/keydb-server
+    /tmp/keydb-fixture/keydb-server --storage-provider flash /tmp/ --port 6378 --bind 127.0.0.1 --daemonize yes
+    /tmp/keydb-fixture/keydb-server --port 6377 --bind 127.0.0.1 --daemonize yes
     check_port 6377
     check_port 6378
 }
