@@ -38,6 +38,9 @@ jobs:
         with:
           go-version: 'oldstable'
 
+      - name: Test mutation report aggregation
+        run: python3 -m unittest discover -s .github/scripts/mutate -p report_test.py -v
+
       - name: install go-mutesting
         run: |
           bash .github/scripts/mutate/install_mutator.sh
@@ -145,7 +148,6 @@ jobs:
         run: |
           bash .github/scripts/mutate/install_mutator.sh
           sudo .github/scripts/apt_install.sh g++-multilib redis-server libacl1-dev attr python3-tk
-          sudo pip install mysqlclient
           sudo apt-get install -y glusterfs-server
 
       - name: Prepare Database
@@ -203,9 +205,20 @@ jobs:
           # COVERAGE_FILE=mutest-cov.out TEST_FILE_NAME="$test_file" PACKAGE_PATH="$package_path" go-mutesting $source_file --debug --exec=.github/scripts/mutate/mutest.sh  --do-not-remove-tmp-folder --blacklist $black_list_file 
           if [ $? != 0 ]; then echo "run mutesting.py failed" && exit 1; fi
           
-          [[ -z "${{secrets.MYSQL_PASSWORD_FOR_JUICEDATA}} " ]] && echo "<WARNING>: MYSQL_PASSWORD is empty" && exit 0
-          export MYSQL_PASSWORD=${{secrets.MYSQL_PASSWORD_FOR_JUICEDATA}} 
-          JOB_NAME=${{matrix.test_file}} JOB_URL=${{steps.jobs.outputs.html_url}}  STAT_RESULT_FILE=stat_result.log python3 .github/scripts/mutate/save_report.py
+      - name: Save mutation report
+        if: always()
+        env:
+          JOB_NAME: ${{ matrix.test_file }}
+          JOB_URL: ${{ steps.jobs.outputs.html_url }}
+        run: python3 .github/scripts/mutate/report.py save stat_result.log mutation-reports
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report-${{ strategy.job-index }}
+          path: mutation-reports/*.json
+          if-no-files-found: error
 
       - name: Setup upterm session
         if: failure() && (github.event.inputs.debug == 'true' || github.run_attempt != 1)
@@ -217,40 +230,43 @@ jobs:
     needs: [build-matrix, mutate-test]
     if: always() && !github.event.pull_request.draft
     steps:
-      - uses: technote-space/workflow-conclusion-action@v3
       - uses: actions/checkout@v3
 
-      - name: Check Failure
-        if: env.WORKFLOW_CONCLUSION == 'failure'
-        run: exit 1
-
-      - name: Install tools
-        run: |
-          sudo pip install mysqlclient
+      - name: Download mutation reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: mutation-report-*
+          path: mutation-reports
+          merge-multiple: true
 
       - name: Generate mutate report
+        env:
+          EXPECTED_JOBS: ${{ needs.build-matrix.outputs.matrix }}
         run: |
-          [[ -z "${{secrets.MYSQL_PASSWORD_FOR_JUICEDATA}} " ]] && echo "<WARNING>: MYSQL_PASSWORD is empty" && exit 0
-          export MYSQL_PASSWORD=${{secrets.MYSQL_PASSWORD_FOR_JUICEDATA}} 
-          mutate_report=$(python3 .github/scripts/mutate/query_report.py)
-          echo "mutate_report is $mutate_report"
-          # echo "mutate_report=$mutate_report" >> $GITHUB_ENV
-          MY_STRING=$(cat << EOF
-          $mutate_report
-          EOF
-          )
-          echo "MY_STRING<<EOF" >> $GITHUB_ENV
-          echo "$MY_STRING" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-          
+          set -o pipefail
+          python3 .github/scripts/mutate/report.py summary mutation-reports | tee mutation-report.md
+
+      - name: Publish job summary
+        if: always()
+        run: cat mutation-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload aggregate report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report-summary
+          path: mutation-report.md
+          if-no-files-found: error
+
       - uses: mshick/add-pr-comment@v2
+        if: github.event_name == 'pull_request'
         with:
           allow-repeats: true
-          message: |
-            *Mutate Test Report*
-            ${{env.MY_STRING}} 
-            
-            Usage: https://github.com/juicedata/juicefs/blob/main/.github/scripts/mutate/how_to_use_mutate_test.md  
+          message-path: mutation-report.md
+
+      - name: Check Failure
+        if: always() && (needs.build-matrix.result != 'success' || needs.mutate-test.result != 'success')
+        run: exit 1
 
       - name: Send Slack Notification
         if: failure() && github.event_name != 'workflow_dispatch'
