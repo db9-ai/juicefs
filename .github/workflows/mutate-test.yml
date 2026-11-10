@@ -122,11 +122,8 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v3
-      - name: Authenticate private Go dependencies
-        uses: ./.github/actions/private-go-auth
-        with:
-          client-id: ${{ vars.SYS9_INFRA_APP_CLIENT_ID }}
-          private-key: ${{ secrets.SYS9_INFRA_APP_PRIVATE_KEY }}
+      - name: Materialize private Go dependencies
+        uses: ./.github/actions/materialize-private-go-dependencies
 
       - name: Get Current Job Log URL
         uses: Tiryoh/gha-jobid-action@v0
@@ -186,7 +183,7 @@ jobs:
           if [[ "$test_file" =~ ^pkg/.* ]]; then
             go test ./$package_path/...  -v -run "$test_cases" -count=1 -cover -timeout=5m -coverpkg=./$package_path/... -coverprofile=mutest-cov.out
           elif [[ "$test_file" =~ ^cmd/.* ]]; then
-            sudo --preserve-env=GOPRIVATE,GO_DEPENDENCY_TOKEN,GIT_CONFIG_PARAMETERS,GIT_CONFIG_COUNT,GIT_CONFIG_KEY_0,GIT_CONFIG_VALUE_0 JFS_GC_SKIPPEDTIME=1 MINIO_ACCESS_KEY=testUser MINIO_SECRET_KEY=testUserPassword go test ./cmd/... -v -run "$test_cases" -count=1 -cover -timeout=5m -coverpkg=./pkg/...,./cmd/... -coverprofile=mutest-cov.out
+            sudo JFS_GC_SKIPPEDTIME=1 MINIO_ACCESS_KEY=testUser MINIO_SECRET_KEY=testUserPassword go test ./cmd/... -v -run "$test_cases" -count=1 -cover -timeout=5m -coverpkg=./pkg/...,./cmd/... -coverprofile=mutest-cov.out
           else
             echo "test file location error: $test_file"
             exit 0

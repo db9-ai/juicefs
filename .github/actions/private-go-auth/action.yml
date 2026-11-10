@@ -1,5 +1,5 @@
-name: Authenticate private Go dependencies
-description: Read the PD and TiKV client forks with a short-lived GitHub App token
+name: Authenticate historical Go dependencies
+description: Read private source revisions referenced by historical JuiceFS releases in compatibility tests.
 inputs:
   client-id:
     description: GitHub App client ID
