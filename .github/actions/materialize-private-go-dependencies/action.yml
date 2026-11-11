@@ -4,11 +4,12 @@ runs:
   using: composite
   steps:
     - name: Export PD API V3 client source
+      # This exporter revision's client tree matches the go.mod lock at 9adc0789ac45.
       uses: db9-ai/pd/.github/actions/export-source@1bdb8c684ef77f41ebaea67960b03e298a958169
       with:
         source-path: client
     - name: Export TiKV client source
-      uses: db9-ai/client-go/.github/actions/export-source@642b8f1d87dd480e844f13e286fa042c5887b0bb
+      uses: db9-ai/client-go/.github/actions/export-source@3633819157da496b4c8c977e3ba475ff2df49327
     - name: Configure local Go module replacements
       shell: bash
       run: |
@@ -23,12 +24,15 @@ runs:
         fi
         pd_source_ref="$(cat .deps/pd/.source-ref)"
         client_source_ref="$(cat .deps/client-go/.source-ref)"
-        if [[ "${pd_source_ref}" != "1bdb8c684ef77f41ebaea67960b03e298a958169" || "${client_source_ref}" != "642b8f1d87dd480e844f13e286fa042c5887b0bb" ]]; then
+        if [[ "${pd_source_ref}" != "1bdb8c684ef77f41ebaea67960b03e298a958169" || "${client_source_ref}" != "3633819157da496b4c8c977e3ba475ff2df49327" ]]; then
           echo "exported private Go source does not match the pinned Action revisions" >&2
           exit 1
         fi
         grep -Fqx 'module github.com/tikv/pd/client' .deps/pd/client/go.mod
         grep -Fqx 'module github.com/tikv/client-go/v2' .deps/client-go/go.mod
+
+        grep -Fqx 'replace github.com/tikv/pd/client => github.com/db9-ai/pd/client v0.0.0-20261008163709-9adc0789ac45' go.mod
+        grep -Fqx 'replace github.com/tikv/client-go/v2 => github.com/db9-ai/client-go/v2 v2.0.0-20261008164325-ca07349f6de5' go.mod
 
         pd_replace_count="$(grep -F -c 'replace github.com/tikv/pd/client =>' go.mod || true)"
         client_replace_count="$(grep -F -c 'replace github.com/tikv/client-go/v2 =>' go.mod || true)"
